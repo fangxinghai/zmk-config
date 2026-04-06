@@ -12,4 +12,7 @@ config ZMK_BLE
 config ZMK_RGB_UNDERGLOW
     default y
 
+config ZMK_STATUS_LED
+    default y
+
 endif
