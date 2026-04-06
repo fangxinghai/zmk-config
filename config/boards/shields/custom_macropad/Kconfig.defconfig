@@ -1,7 +1,7 @@
 if SHIELD_CUSTOM_MACROPAD
 
 config ZMK_KEYBOARD_NAME
-    default "Custom Macropad"
+    default "ARC-6"
 
 config ZMK_USB
     default y
