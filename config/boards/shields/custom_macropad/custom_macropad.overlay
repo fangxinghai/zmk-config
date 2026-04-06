@@ -54,7 +54,7 @@
             label = "White LED";
         };
 
-        blue_led: led_blue {
+        macropad_blue_led: led_blue {
             gpios = <&gpio0 19 GPIO_ACTIVE_HIGH>;
             label = "Blue LED";
         };
