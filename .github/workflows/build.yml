@@ -21,23 +21,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache west modules
-        uses: actions/cache@v4
-        env:
-          cache-name: cache-zephyr-modules
-        with:
-          path: |
-            modules/
-            tools/
-            zephyr/
-            bootloader/
-            zmk/
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('config/west.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-build-${{ env.cache-name }}-
-            ${{ runner.os }}-build-
-            ${{ runner.os }}-
-
       - name: West Init
         run: west init -l config
 
@@ -48,7 +31,7 @@ jobs:
         run: west zephyr-export
 
       - name: Build firmware
-        run: west build -s zmk/app -b nice_nano -- -DSHIELD=custom_macropad -DZMK_CONFIG="$GITHUB_WORKSPACE/config"
+        run: west build -s zmk/app -b nice_nano -S studio-rpc-usb-uart -- -DSHIELD=custom_macropad -DZMK_CONFIG="$GITHUB_WORKSPACE/config" -DCONFIG_ZMK_STUDIO=y
 
       - name: Rename artifacts
         run: |
