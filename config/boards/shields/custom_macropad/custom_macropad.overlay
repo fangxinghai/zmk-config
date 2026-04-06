@@ -10,6 +10,7 @@
 #include <dt-bindings/zmk/outputs.h>
 #include <dt-bindings/led/led.h>
 #include <physical_layouts.dtsi>
+#include <dt-bindings/zmk/matrix_transform.h>
 
 / {
     chosen {
@@ -38,9 +39,17 @@
             ;
     };
 
+    direct_transform: direct_matrix_transform {
+        compatible = "zmk,matrix-transform";
+        rows = <1>;
+        columns = <6>;
+        map = <0 1 2 3 4 5>;
+    };
+
     physical_layout0: physical_layout_0 {
         compatible = "zmk,physical-layout";
         display-name = "Default Layout";
+        transform = <&direct_transform>;
         kscan = <&kscan0>;
         keys =
             <&key_physical_attrs 100 100 0   0   0 0 0>,
