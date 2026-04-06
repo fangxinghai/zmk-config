@@ -18,6 +18,12 @@
         zmk,underglow = &led_strip;
     };
 
+    ext_power {
+        compatible = "zmk,ext-power-generic";
+        control-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+        init-delay-ms = <50>;
+    };
+
     kscan0: kscan_0 {
         compatible = "zmk,kscan-gpio-direct";
         wakeup-source;
