@@ -1,8 +1,5 @@
 /*
  * Default Keymap for Custom Macropad
- * Layer 0 (DEFAULT): Media / Shortcuts
- * Layer 1 (FN):      Navigation / BT
- * Layer 2 (RGB):     RGB controls
  */
 
 #include <behaviors.dtsi>
@@ -20,8 +17,7 @@
         compatible = "zmk,keymap";
 
         default_layer {
-            label = "BASE";
-            bindings = <
+            bindings = 
                 &kp C_MUTE    &kp C_PP      &mo FN
                 &kp C_PREV    &kp C_NEXT    &mo RGB_L
             >;
@@ -29,8 +25,7 @@
         };
 
         fn_layer {
-            label = "FN";
-            bindings = <
+            bindings = 
                 &bt BT_SEL 0  &bt BT_SEL 1  &trans
                 &bt BT_SEL 2  &bt BT_CLR    &out OUT_TOG
             >;
@@ -38,8 +33,7 @@
         };
 
         rgb_layer {
-            label = "RGB";
-            bindings = <
+            bindings = 
                 &rgb_ug RGB_TOG  &rgb_ug RGB_EFF  &rgb_ug RGB_HUI
                 &rgb_ug RGB_BRI  &rgb_ug RGB_BRD  &trans
             >;
