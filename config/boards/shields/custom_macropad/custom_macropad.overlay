@@ -38,20 +38,9 @@
             ;
     };
 
-    default_transform: matrix_transform {
-        compatible = "zmk,matrix-transform";
-        rows = <2>;
-        columns = <3>;
-        map = 
-            RC(0,0) RC(0,1) RC(0,2)
-            RC(1,0) RC(1,1) RC(1,2)
-        >;
-    };
-
     physical_layout0: physical_layout_0 {
         compatible = "zmk,physical-layout";
         display-name = "Default Layout";
-        transform = <&default_transform>;
         kscan = <&kscan0>;
         keys =
             <&key_physical_attrs 100 100 0   0   0 0 0>
@@ -81,7 +70,7 @@
         compatible = "gpio-leds";
 
         macropad_blue_led: led_blue {
-            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;   /* D19 = P0.02 */
+            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
             label = "Blue LED";
         };
     };
