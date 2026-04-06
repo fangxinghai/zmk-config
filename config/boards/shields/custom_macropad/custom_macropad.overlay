@@ -1,7 +1,6 @@
 /*
  * Custom Macropad Shield Overlay
  * MCU: nRF52840 (nice!nano v2)
- * Pin mapping uses nice!nano Pro Micro compatible labels
  */
 
 #include <behaviors.dtsi>
@@ -63,6 +62,11 @@
             gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;   /* D19 = P0.02 */
             label = "Blue LED";
         };
+    };
+
+    status_led_device: status_led_device {
+        compatible = "zmk,status-led";
+        led = <&macropad_blue_led>;
     };
 };
 
