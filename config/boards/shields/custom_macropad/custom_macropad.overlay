@@ -66,13 +66,14 @@
         triggers-per-rotation = <20>;
     };
 
-    encoder: encoder_0 {
+      encoder: encoder_0 {
         compatible = "alps,ec11";
-        a-gpios = <&gpio1 14 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
-        b-gpios = <&gpio1 15 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+        a-gpios = <&gpio1 11 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;   /* D14 = P1.11 */
+        b-gpios = <&gpio1 13 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;   /* D15 = P1.13 */
         steps = <80>;
         status = "okay";
     };
+
 
     leds {
         compatible = "gpio-leds";
