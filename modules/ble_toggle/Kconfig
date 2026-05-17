@@ -1,0 +1,4 @@
+config CUSTOM_BLE_TOGGLE
+    bool "Custom BLE Toggle"
+    default y
+    depends on BT
