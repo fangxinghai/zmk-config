@@ -26,7 +26,7 @@ static void check_output_mode(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(output_check_work, check_output_mode);
 
 static void check_output_mode(struct k_work *work) {
-    struct zmk_endpoint_instance endpoint = zmk_endpoints_selected();
+    struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
 
     if (endpoint.transport == ZMK_TRANSPORT_USB) {
         disable_ble();
