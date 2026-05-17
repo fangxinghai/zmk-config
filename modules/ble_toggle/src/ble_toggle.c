@@ -1,10 +1,10 @@
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
-#include <zmk/event_manager.h>
-#include <zmk/endpoints.h>
 #include <zmk/ble.h>
 #include <zmk/usb.h>
+#include <zmk/endpoints_types.h>
+#include <zmk/endpoints.h>
 
 static bool ble_disabled = false;
 
@@ -17,9 +17,8 @@ static void disable_ble(void) {
 
 static void enable_ble(void) {
     if (ble_disabled) {
-        zmk_ble_clear_bonds();
-        zmk_ble_prof_select(0);
         ble_disabled = false;
+        zmk_ble_prof_select(0);
     }
 }
 
@@ -27,9 +26,9 @@ static void check_output_mode(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(output_check_work, check_output_mode);
 
 static void check_output_mode(struct k_work *work) {
-    enum zmk_endpoint endpoint = zmk_endpoints_selected().transport;
+    struct zmk_endpoint_instance endpoint = zmk_endpoints_selected();
 
-    if (endpoint == ZMK_TRANSPORT_USB) {
+    if (endpoint.transport == ZMK_TRANSPORT_USB) {
         disable_ble();
     } else {
         enable_ble();
