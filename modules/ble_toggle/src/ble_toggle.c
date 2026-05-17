@@ -2,44 +2,44 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zmk/event_manager.h>
-#include <zmk/events/output_selection_changed.h>
+#include <zmk/endpoints.h>
 #include <zmk/ble.h>
 #include <zmk/usb.h>
 
+static bool ble_disabled = false;
+
 static void disable_ble(void) {
-    bt_conn_foreach(BT_CONN_TYPE_LE,
-                   (bt_conn_foreach_cb)bt_conn_disconnect,
-                   BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-    bt_le_adv_stop();
+    if (!ble_disabled) {
+        bt_le_adv_stop();
+        ble_disabled = true;
+    }
 }
 
 static void enable_ble(void) {
-    zmk_ble_adv_resume();
-}
-
-static int output_selection_listener(const zmk_event_t *eh) {
-    const struct zmk_output_selection_changed *ev =
-        as_zmk_output_selection_changed(eh);
-
-    if (ev == NULL) return 0;
-
-    if (ev->transport == ZMK_OUTPUT_TRANSPORT_USB) {
-        disable_ble();
-    } else if (ev->transport == ZMK_OUTPUT_TRANSPORT_BLE) {
-        enable_ble();
+    if (ble_disabled) {
+        zmk_ble_clear_bonds();
+        zmk_ble_prof_select(0);
+        ble_disabled = false;
     }
-    return 0;
 }
 
-ZMK_LISTENER(ble_toggle, output_selection_listener);
-ZMK_SUBSCRIPTION(ble_toggle, zmk_output_selection_changed);
+static void check_output_mode(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(output_check_work, check_output_mode);
 
-static int ble_toggle_init(void) {
-    if (zmk_usb_is_powered()) {
+static void check_output_mode(struct k_work *work) {
+    enum zmk_endpoint endpoint = zmk_endpoints_selected().transport;
+
+    if (endpoint == ZMK_TRANSPORT_USB) {
         disable_ble();
     } else {
         enable_ble();
     }
+
+    k_work_schedule(&output_check_work, K_SECONDS(2));
+}
+
+static int ble_toggle_init(void) {
+    k_work_schedule(&output_check_work, K_SECONDS(5));
     return 0;
 }
 
