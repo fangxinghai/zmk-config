@@ -16,6 +16,15 @@
         zmk,kscan = &kscan0;
         zmk,underglow = &led_strip;
         zmk,physical-layout = &physical_layout0;
+        zmk,battery = &vbatt;                        /* 电池检测 */
+    };
+
+    /* 电池电压分压检测 */
+    vbatt: vbatt {
+        compatible = "zmk,battery-voltage-divider";
+        io-channels = <&adc 2>;                       /* P0.04 = AIN2 */
+        output-ohms = <5100000>;                      /* R11 = 5.1kΩ */
+        full-ohms = <(5100000 + 5100000)>;            /* R10 + R11 = 10.2kΩ */
     };
 
     ext_power {
@@ -66,27 +75,29 @@
         triggers-per-rotation = <12>;
     };
 
-      encoder: encoder_0 {
+    /* 编码器 - 修复GPIO为ACTIVE_LOW */
+    encoder: encoder_0 {
         compatible = "alps,ec11";
-        a-gpios = <&gpio1 11 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;   /* D14 = P1.11 */
-        b-gpios = <&gpio1 13 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;   /* D15 = P1.13 */
+        a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;   /* D14 = P1.11 */
+        b-gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;   /* D15 = P1.13 */
         steps = <48>;
         status = "okay";
     };
 
-
+    /* 状态指示 LED */
     leds {
         compatible = "gpio-leds";
 
-        macropad_blue_led: led_blue {
-            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
-            label = "Blue LED";
+        /* 蓝牙状态 + 低电量指示 LED = D20 = P0.29 */
+        macropad_status_led: led_status {
+            gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
+            label = "Status LED";
         };
     };
 
     status_led_device: status_led_device {
         compatible = "zmk,status-led";
-        led = <&macropad_blue_led>;
+        led = <&macropad_status_led>;
     };
 };
 
