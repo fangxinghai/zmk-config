@@ -1,0 +1,18 @@
+if SHIELD_CUSTOM_MACROPAD
+
+config ZMK_KEYBOARD_NAME
+    default "ARC-6"
+
+config ZMK_USB
+    default y
+
+config ZMK_BLE
+    default y
+
+config ZMK_RGB_UNDERGLOW
+    default y
+
+config ZMK_STATUS_LED
+    default y
+
+endif

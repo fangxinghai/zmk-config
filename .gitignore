@@ -1,0 +1,10 @@
+build/
+.west/
+modules/
+zephyr/
+tools/
+bootloader/
+zmk/
+*.pyc
+__pycache__/
+.venv/
