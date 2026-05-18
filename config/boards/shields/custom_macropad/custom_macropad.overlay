@@ -14,7 +14,6 @@
 / {
     chosen {
         zmk,kscan = &kscan0;
-        zmk,underglow = &led_strip;
         zmk,physical-layout = &physical_layout0;
         zmk,battery = &vbatt;
     };
@@ -78,28 +77,14 @@
     /* 编码器 */
     encoder: encoder_0 {
         compatible = "alps,ec11";
-        a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;   /* D14 = P1.11 */
-        b-gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;   /* D15 = P1.13 */
+        a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+        b-gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         steps = <48>;
         status = "okay";
     };
-
-    /* 状态指示 LED */
-    leds {
-        compatible = "gpio-leds";
-
-        macropad_status_led: led_status {
-            gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;   /* D20 = P0.29 */
-            label = "Status LED";
-        };
-    };
-
-    status_led_device: status_led_device {
-        compatible = "zmk,status-led";
-        led = <&macropad_status_led>;
-    };
 };
 
+/* 一颗 WS2812 状态灯 */
 &spi3 {
     compatible = "nordic,nrf-spim";
     status = "okay";
@@ -113,7 +98,7 @@
         label = "WS2812";
         reg = <0>;
         spi-max-frequency = <4000000>;
-        chain-length = <6>;
+        chain-length = <1>;            /* 只有 1 颗状态灯 */
         spi-one-frame = <0x70>;
         spi-zero-frame = <0x40>;
         color-mapping = <LED_COLOR_ID_GREEN
