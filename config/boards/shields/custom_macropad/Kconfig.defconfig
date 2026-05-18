@@ -9,9 +9,6 @@ config ZMK_USB
 config ZMK_BLE
     default y
 
-config ZMK_RGB_UNDERGLOW
-    default y
-
 config ZMK_STATUS_LED
     default y
 
