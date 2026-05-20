@@ -4,6 +4,7 @@
 #include <zephyr/drivers/led_strip.h>
 #include <zephyr/device.h>
 #include <zephyr/input/input.h>
+#include <zephyr/logging/log.h>
 #include <string.h>
 #include <zmk/ble.h>
 #include <zmk/usb.h>
@@ -12,6 +13,8 @@
 #include <zmk/battery.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/event_manager.h>
+
+LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* ===================================================
  * WS2812 状态灯
@@ -93,7 +96,6 @@ static void disable_ble(void) {
 static void enable_ble(void) {
     if (ble_forced_off) {
         ble_forced_off = false;
-        /* 直接让 ZMK 管理广播恢复 */
         zmk_ble_prof_select(0);
     }
 }
@@ -157,6 +159,8 @@ static void check_status(struct k_work *work) {
 #define VIRTUAL_KEY_PRESS_MS  5
 
 static void encoder_virtual_press(uint32_t position) {
+    LOG_INF("Encoder virtual press: position=%d", position);
+
     raise_zmk_position_state_changed((struct zmk_position_state_changed){
         .source = 0,
         .position = position,
@@ -185,8 +189,11 @@ static void ccw_work_handler(struct k_work *work) {
     encoder_virtual_press(ENCODER_CCW_POSITION);
 }
 
-/* Zephyr 4.x INPUT_CALLBACK_DEFINE 需要3个参数：device, callback, user_data */
 static void encoder_input_cb(struct input_event *evt, void *user_data) {
+    /* 收到任何 input 事件都打日志 */
+    LOG_INF("Encoder input: type=%d code=%d value=%d sync=%d",
+            evt->type, evt->code, evt->value, evt->sync);
+
     if (evt->code != INPUT_REL_WHEEL) {
         return;
     }
@@ -198,6 +205,7 @@ static void encoder_input_cb(struct input_event *evt, void *user_data) {
     }
 }
 
+/* 注册到编码器设备的 input 回调 */
 INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_NODELABEL(encoder)), encoder_input_cb, NULL);
 
 /* ===================================================
@@ -208,6 +216,7 @@ static int ble_toggle_init(void) {
     /* LED 初始化 */
     led_strip_dev = DEVICE_DT_GET(DT_NODELABEL(led_strip));
     if (!device_is_ready(led_strip_dev)) {
+        LOG_WRN("LED strip not ready");
         led_strip_dev = NULL;
     }
     memset(pixels, 0, sizeof(pixels));
@@ -215,6 +224,17 @@ static int ble_toggle_init(void) {
     /* 旋钮工作队列初始化 */
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
+
+    /* 验证编码器设备 */
+    const struct device *enc_dev = DEVICE_DT_GET(DT_NODELABEL(encoder));
+    if (device_is_ready(enc_dev)) {
+        LOG_INF("Encoder device ready: %s", enc_dev->name);
+    } else {
+        LOG_ERR("Encoder device NOT ready!");
+    }
+
+    LOG_INF("BLE Toggle + Encoder-to-Keys initialized (CW=pos%d, CCW=pos%d)",
+            ENCODER_CW_POSITION, ENCODER_CCW_POSITION);
 
     /* 启动状态检测 */
     k_work_schedule(&status_check_work, K_SECONDS(5));
