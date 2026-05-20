@@ -1,6 +1,7 @@
 /*
  * Custom Macropad Shield Overlay
  * MCU: nRF52840 (nice!nano v2)
+ * 6 物理按键 + 2 虚拟旋钮按键 = 8 个 position
  */
 
 #include <behaviors.dtsi>
@@ -37,20 +38,21 @@
         wakeup-source;
 
         input-gpios
-            = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 1 = D5 = P0.24 */
-            , <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 2 = D4 = P0.22 */
-            , <&gpio0 20 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 3 = D3 = P0.20 */
-            , <&gpio1 4  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 4 = D8 = P1.04 */
-            , <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 5 = D7 = P0.11 */
-            , <&gpio1 0  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 6 = D6 = P1.00 */
+            = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 1 = P0.24 */
+            , <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 2 = P0.22 */
+            , <&gpio0 20 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 3 = P0.20 */
+            , <&gpio1 4  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 4 = P1.04 */
+            , <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 5 = P0.11 */
+            , <&gpio1 0  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 6 = P1.00 */
             ;
     };
 
+    /* 8列：6 物理按键 + 2 虚拟旋钮按键 */
     direct_transform: direct_matrix_transform {
         compatible = "zmk,matrix-transform";
         rows = <1>;
-        columns = <6>;
-        map = <0 1 2 3 4 5>;
+        columns = <8>;
+        map = <0 1 2 3 4 5 6 7>;
     };
 
     physical_layout0: physical_layout_0 {
@@ -59,22 +61,18 @@
         transform = <&direct_transform>;
         kscan = <&kscan0>;
         keys =
-            <&key_physical_attrs 100 100 0   0   0 0 0>,
-            <&key_physical_attrs 100 100 100 0   0 0 0>,
-            <&key_physical_attrs 100 100 200 0   0 0 0>,
-            <&key_physical_attrs 100 100 0   100 0 0 0>,
-            <&key_physical_attrs 100 100 100 100 0 0 0>,
-            <&key_physical_attrs 100 100 200 100 0 0 0>
+            <&key_physical_attrs 100 100 0   0   0 0 0>,    /* Key 1 */
+            <&key_physical_attrs 100 100 100 0   0 0 0>,    /* Key 2 */
+            <&key_physical_attrs 100 100 200 0   0 0 0>,    /* Key 3 */
+            <&key_physical_attrs 100 100 0   100 0 0 0>,    /* Key 4 */
+            <&key_physical_attrs 100 100 100 100 0 0 0>,    /* Key 5 */
+            <&key_physical_attrs 100 100 200 100 0 0 0>,    /* Key 6 */
+            <&key_physical_attrs 100 100 300 0   0 0 0>,    /* Encoder CW  */
+            <&key_physical_attrs 100 100 300 100 0 0 0>     /* Encoder CCW */
             ;
     };
 
-    sensors: sensors {
-        compatible = "zmk,keymap-sensors";
-        sensors = <&encoder>;
-        triggers-per-rotation = <24>;
-    };
-
-    /* 编码器 */
+    /* 编码器硬件 - 保留，模块监听 input 事件 */
     encoder: encoder_0 {
         compatible = "alps,ec11";
         a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
@@ -84,7 +82,7 @@
     };
 };
 
-/* 一颗 WS2812 状态灯 */
+/* WS2812 状态灯 */
 &spi3 {
     compatible = "nordic,nrf-spim";
     status = "okay";
@@ -98,7 +96,7 @@
         label = "WS2812";
         reg = <0>;
         spi-max-frequency = <4000000>;
-        chain-length = <1>;            /* 只有 1 颗状态灯 */
+        chain-length = <1>;
         spi-one-frame = <0x70>;
         spi-zero-frame = <0x40>;
         color-mapping = <LED_COLOR_ID_GREEN
