@@ -3,4 +3,3 @@ config CUSTOM_BLE_TOGGLE
     default y
     depends on BT
     depends on LED_STRIP
-    depends on INPUT
