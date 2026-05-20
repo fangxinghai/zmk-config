@@ -2,8 +2,8 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/drivers/led_strip.h>
+#include <zephyr/drivers/sensor.h>
 #include <zephyr/device.h>
-#include <zephyr/input/input.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <zmk/ble.h>
@@ -12,7 +12,9 @@
 #include <zmk/endpoints.h>
 #include <zmk/battery.h>
 #include <zmk/events/position_state_changed.h>
+#include <zmk/events/sensor_event.h>
 #include <zmk/event_manager.h>
+#include <zmk/sensors.h>
 
 LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -150,6 +152,7 @@ static void check_status(struct k_work *work) {
 /* ===================================================
  * 旋钮转虚拟按键
  *
+ * 拦截 ZMK sensor event，转换为虚拟按键
  * 顺时针转一格 → position 6 按下+释放一次
  * 逆时针转一格 → position 7 按下+释放一次
  * =================================================== */
@@ -189,24 +192,40 @@ static void ccw_work_handler(struct k_work *work) {
     encoder_virtual_press(ENCODER_CCW_POSITION);
 }
 
-static void encoder_input_cb(struct input_event *evt, void *user_data) {
-    /* 收到任何 input 事件都打日志 */
-    LOG_INF("Encoder input: type=%d code=%d value=%d sync=%d",
-            evt->type, evt->code, evt->value, evt->sync);
-
-    if (evt->code != INPUT_REL_WHEEL) {
-        return;
+/*
+ * ZMK sensor event listener
+ * 拦截 EC11 产生的 sensor event，判断方向，触发虚拟按键
+ * 返回 ZMK_EV_EVENT_HANDLED 阻止 ZMK 继续处理（因为没有 sensor-bindings）
+ */
+static int sensor_event_listener(const zmk_event_t *eh) {
+    struct zmk_sensor_event *sensor_event = as_zmk_sensor_event(eh);
+    if (sensor_event == NULL) {
+        return ZMK_EV_EVENT_BUBBLE;
     }
 
-    if (evt->value > 0) {
-        k_work_submit(&cw_work);
-    } else if (evt->value < 0) {
-        k_work_submit(&ccw_work);
+    /* 获取 channel data 中的旋转值 */
+    const struct zmk_sensor_channel_data *channel_data = sensor_event->channel_data;
+    int channel_data_size = sensor_event->channel_data_size;
+
+    for (int i = 0; i < channel_data_size; i++) {
+        if (channel_data[i].channel == SENSOR_CHAN_ROTATION) {
+            int value = sensor_value_to_micro(&channel_data[i].value);
+            LOG_INF("Sensor rotation event: value=%d", value);
+
+            if (value > 0) {
+                k_work_submit(&cw_work);
+            } else if (value < 0) {
+                k_work_submit(&ccw_work);
+            }
+            return ZMK_EV_EVENT_HANDLED;
+        }
     }
+
+    return ZMK_EV_EVENT_BUBBLE;
 }
 
-/* 注册到编码器设备的 input 回调 */
-INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_NODELABEL(encoder)), encoder_input_cb, NULL);
+ZMK_LISTENER(encoder_to_keys, sensor_event_listener);
+ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
 
 /* ===================================================
  * 初始化
@@ -224,14 +243,6 @@ static int ble_toggle_init(void) {
     /* 旋钮工作队列初始化 */
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
-
-    /* 验证编码器设备 */
-    const struct device *enc_dev = DEVICE_DT_GET(DT_NODELABEL(encoder));
-    if (device_is_ready(enc_dev)) {
-        LOG_INF("Encoder device ready: %s", enc_dev->name);
-    } else {
-        LOG_ERR("Encoder device NOT ready!");
-    }
 
     LOG_INF("BLE Toggle + Encoder-to-Keys initialized (CW=pos%d, CCW=pos%d)",
             ENCODER_CW_POSITION, ENCODER_CCW_POSITION);
