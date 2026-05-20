@@ -3,28 +3,29 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/drivers/led_strip.h>
 #include <zephyr/device.h>
+#include <zephyr/input/input.h>
 #include <string.h>
 #include <zmk/ble.h>
 #include <zmk/usb.h>
 #include <zmk/endpoints_types.h>
 #include <zmk/endpoints.h>
 #include <zmk/battery.h>
+#include <zmk/events/position_state_changed.h>
+#include <zmk/event_manager.h>
 
-/* 只有 1 颗 WS2812 */
+/* ===================================================
+ * WS2812 状态灯
+ * =================================================== */
+
 #define TOTAL_LEDS 1
 
-/* LED strip 设备 */
 static const struct device *led_strip_dev;
 static struct led_rgb pixels[TOTAL_LEDS];
 
-/* 蓝牙状态 */
 static bool ble_forced_off = false;
 static bool user_selected_ble = false;
-
-/* LED 闪烁控制 */
 static bool led_blink_on = true;
 
-/* LED 状态 */
 enum led_state {
     LED_STATE_USB,
     LED_STATE_BLE_PAIRING,
@@ -34,7 +35,6 @@ enum led_state {
 
 static enum led_state current_led_state = LED_STATE_USB;
 
-/* 设置 LED 颜色 */
 static void set_led(uint8_t r, uint8_t g, uint8_t b) {
     if (led_strip_dev == NULL) {
         return;
@@ -45,16 +45,13 @@ static void set_led(uint8_t r, uint8_t g, uint8_t b) {
     led_strip_update_rgb(led_strip_dev, pixels, TOTAL_LEDS);
 }
 
-/* 更新状态灯 */
 static void update_status_led(void) {
     switch (current_led_state) {
         case LED_STATE_USB:
-            /* 绿色常亮 */
             set_led(0, 50, 0);
             break;
 
         case LED_STATE_BLE_PAIRING:
-            /* 蓝色快闪 */
             if (led_blink_on) {
                 set_led(0, 0, 50);
             } else {
@@ -64,12 +61,10 @@ static void update_status_led(void) {
             break;
 
         case LED_STATE_BLE_CONNECTED:
-            /* 蓝色常亮 */
             set_led(0, 0, 50);
             break;
 
         case LED_STATE_LOW_BATTERY:
-            /* 红色闪烁 */
             if (led_blink_on) {
                 set_led(50, 0, 0);
             } else {
@@ -84,7 +79,10 @@ static void update_status_led(void) {
     }
 }
 
-/* 蓝牙控制 */
+/* ===================================================
+ * 蓝牙控制
+ * =================================================== */
+
 static void disable_ble(void) {
     if (!ble_forced_off) {
         bt_le_adv_stop();
@@ -104,14 +102,16 @@ static void enable_ble(void) {
     }
 }
 
-/* 主检测循环 */
+/* ===================================================
+ * 状态检测主循环
+ * =================================================== */
+
 static void check_status(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(status_check_work, check_status);
 
 static void check_status(struct k_work *work) {
     struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
 
-    /* 蓝牙开关控制 */
     if (endpoint.transport == ZMK_TRANSPORT_USB) {
         if (!user_selected_ble) {
             disable_ble();
@@ -125,18 +125,13 @@ static void check_status(struct k_work *work) {
         user_selected_ble = false;
     }
 
-    /* 电池电量检测 */
     uint8_t battery_level = zmk_battery_state_of_charge();
 
-    /* 确定 LED 状态 */
     if (battery_level > 0 && battery_level < 10) {
-        /* 电量低于 10% 最高优先级 */
         current_led_state = LED_STATE_LOW_BATTERY;
     } else if (endpoint.transport == ZMK_TRANSPORT_USB && !user_selected_ble) {
-        /* USB 模式 */
         current_led_state = LED_STATE_USB;
     } else if (user_selected_ble || endpoint.transport == ZMK_TRANSPORT_BLE) {
-        /* 蓝牙模式 */
         if (zmk_ble_active_profile_is_connected()) {
             current_led_state = LED_STATE_BLE_CONNECTED;
         } else {
@@ -144,10 +139,8 @@ static void check_status(struct k_work *work) {
         }
     }
 
-    /* 更新 LED */
     update_status_led();
 
-    /* 闪烁状态 200ms，常亮状态 2 秒 */
     if (current_led_state == LED_STATE_BLE_PAIRING ||
         current_led_state == LED_STATE_LOW_BATTERY) {
         k_work_schedule(&status_check_work, K_MSEC(200));
@@ -156,14 +149,77 @@ static void check_status(struct k_work *work) {
     }
 }
 
+/* ===================================================
+ * 旋钮转虚拟按键
+ *
+ * 顺时针转一格 → position 6 按下+释放一次
+ * 逆时针转一格 → position 7 按下+释放一次
+ * =================================================== */
+
+#define ENCODER_CW_POSITION   6
+#define ENCODER_CCW_POSITION  7
+#define VIRTUAL_KEY_PRESS_MS  5
+
+static void encoder_virtual_press(uint32_t position) {
+    raise_zmk_position_state_changed((struct zmk_position_state_changed){
+        .source = 0,
+        .position = position,
+        .state = true,
+        .timestamp = k_uptime_get(),
+    });
+
+    k_msleep(VIRTUAL_KEY_PRESS_MS);
+
+    raise_zmk_position_state_changed((struct zmk_position_state_changed){
+        .source = 0,
+        .position = position,
+        .state = false,
+        .timestamp = k_uptime_get(),
+    });
+}
+
+static struct k_work cw_work;
+static struct k_work ccw_work;
+
+static void cw_work_handler(struct k_work *work) {
+    encoder_virtual_press(ENCODER_CW_POSITION);
+}
+
+static void ccw_work_handler(struct k_work *work) {
+    encoder_virtual_press(ENCODER_CCW_POSITION);
+}
+
+static void encoder_input_cb(struct input_event *evt) {
+    if (evt->code != INPUT_REL_WHEEL) {
+        return;
+    }
+
+    if (evt->value > 0) {
+        k_work_submit(&cw_work);
+    } else if (evt->value < 0) {
+        k_work_submit(&ccw_work);
+    }
+}
+
+INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_NODELABEL(encoder)), encoder_input_cb);
+
+/* ===================================================
+ * 初始化
+ * =================================================== */
+
 static int ble_toggle_init(void) {
+    /* LED 初始化 */
     led_strip_dev = DEVICE_DT_GET(DT_NODELABEL(led_strip));
     if (!device_is_ready(led_strip_dev)) {
         led_strip_dev = NULL;
     }
-
     memset(pixels, 0, sizeof(pixels));
 
+    /* 旋钮工作队列初始化 */
+    k_work_init(&cw_work, cw_work_handler);
+    k_work_init(&ccw_work, ccw_work_handler);
+
+    /* 启动状态检测 */
     k_work_schedule(&status_check_work, K_SECONDS(5));
     return 0;
 }
