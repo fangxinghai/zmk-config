@@ -72,13 +72,20 @@
             ;
     };
 
-    /* 编码器硬件 - 保留，模块监听 input 事件 */
+    /* 编码器硬件 */
     encoder: encoder_0 {
         compatible = "alps,ec11";
         a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         b-gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         steps = <48>;
         status = "okay";
+    };
+
+    /* 恢复 sensors 节点 - ZMK sensor 子系统需要 */
+    sensors: sensors {
+        compatible = "zmk,keymap-sensors";
+        sensors = <&encoder>;
+        triggers-per-rotation = <24>;
     };
 };
 
