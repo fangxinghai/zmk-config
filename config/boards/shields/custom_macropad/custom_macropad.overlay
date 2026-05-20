@@ -1,7 +1,8 @@
 /*
  * Custom Macropad Shield Overlay
  * MCU: nRF52840 (nice!nano v2)
- * 6 物理按键 + 2 虚拟旋钮按键 = 8 个 position
+ * 6 Keys + 1 Rotary Encoder (2 virtual keys) = 8 positions
+ * 6个按键 + 1个旋钮（2个虚拟键位）= 8个position
  */
 
 #include <behaviors.dtsi>
@@ -19,7 +20,6 @@
         zmk,battery = &vbatt;
     };
 
-    /* 电池电压分压检测 */
     vbatt: vbatt {
         compatible = "zmk,battery-voltage-divider";
         io-channels = <&adc 2>;
@@ -47,7 +47,6 @@
             ;
     };
 
-    /* 8列：6 物理按键 + 2 虚拟旋钮按键 */
     direct_transform: direct_matrix_transform {
         compatible = "zmk,matrix-transform";
         rows = <1>;
@@ -55,24 +54,35 @@
         map = <0 1 2 3 4 5 6 7>;
     };
 
+    /*
+     * Physical Layout for ZMK Studio
+     *
+     *  ┌─────────────────┐    ┌──────────┐
+     *  │ [1]  [2]  [3]   │    │  [CW]    │
+     *  │ [4]  [5]  [6]   │    │  [CCW]   │
+     *  └─────────────────┘    └──────────┘
+     *    6 Keys (3x2)         1 Encoder
+     *    6个按键(3列2行)       1个旋钮
+     */
     physical_layout0: physical_layout_0 {
         compatible = "zmk,physical-layout";
         display-name = "Default Layout";
         transform = <&direct_transform>;
         kscan = <&kscan0>;
         keys =
-            <&key_physical_attrs 100 100 0   0   0 0 0>,    /* Key 1 */
-            <&key_physical_attrs 100 100 100 0   0 0 0>,    /* Key 2 */
-            <&key_physical_attrs 100 100 200 0   0 0 0>,    /* Key 3 */
-            <&key_physical_attrs 100 100 0   100 0 0 0>,    /* Key 4 */
-            <&key_physical_attrs 100 100 100 100 0 0 0>,    /* Key 5 */
-            <&key_physical_attrs 100 100 200 100 0 0 0>,    /* Key 6 */
-            <&key_physical_attrs 100 100 300 0   0 0 0>,    /* Encoder CW  */
-            <&key_physical_attrs 100 100 300 100 0 0 0>     /* Encoder CCW */
+            /* ---- 左侧 6 键区 (3x2) ---- */
+            <&key_physical_attrs 100 100   0   0   0 0 0>,   /* Key 1 */
+            <&key_physical_attrs 100 100 100   0   0 0 0>,   /* Key 2 */
+            <&key_physical_attrs 100 100 200   0   0 0 0>,   /* Key 3 */
+            <&key_physical_attrs 100 100   0 100   0 0 0>,   /* Key 4 */
+            <&key_physical_attrs 100 100 100 100   0 0 0>,   /* Key 5 */
+            <&key_physical_attrs 100 100 200 100   0 0 0>,   /* Key 6 */
+            /* ---- 右侧旋钮区（间隔50） ---- */
+            <&key_physical_attrs 100 100 350   0   0 0 0>,   /* Encoder CW  */
+            <&key_physical_attrs 100 100 350 100   0 0 0>    /* Encoder CCW */
             ;
     };
 
-    /* 编码器硬件 */
     encoder: encoder_0 {
         compatible = "alps,ec11";
         a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
@@ -81,7 +91,6 @@
         status = "okay";
     };
 
-    /* 恢复 sensors 节点 - ZMK sensor 子系统需要 */
     sensors: sensors {
         compatible = "zmk,keymap-sensors";
         sensors = <&encoder>;
