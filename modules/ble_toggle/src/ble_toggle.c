@@ -93,12 +93,8 @@ static void disable_ble(void) {
 static void enable_ble(void) {
     if (ble_forced_off) {
         ble_forced_off = false;
-        int err = bt_le_adv_start(
-            BT_LE_ADV_CONN_ONE_TIME,
-            NULL, 0, NULL, 0);
-        if (err) {
-            zmk_ble_prof_select(0);
-        }
+        /* 直接让 ZMK 管理广播恢复 */
+        zmk_ble_prof_select(0);
     }
 }
 
@@ -189,7 +185,8 @@ static void ccw_work_handler(struct k_work *work) {
     encoder_virtual_press(ENCODER_CCW_POSITION);
 }
 
-static void encoder_input_cb(struct input_event *evt) {
+/* Zephyr 4.x INPUT_CALLBACK_DEFINE 需要3个参数：device, callback, user_data */
+static void encoder_input_cb(struct input_event *evt, void *user_data) {
     if (evt->code != INPUT_REL_WHEEL) {
         return;
     }
@@ -201,7 +198,7 @@ static void encoder_input_cb(struct input_event *evt) {
     }
 }
 
-INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_NODELABEL(encoder)), encoder_input_cb);
+INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_NODELABEL(encoder)), encoder_input_cb, NULL);
 
 /* ===================================================
  * 初始化
