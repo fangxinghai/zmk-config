@@ -9,26 +9,28 @@
 
         default_layer {
             bindings = <
-                &lt 1 W
-                &kp E
-                &kp C_MUTE
-                &kp C_PREV
-                &kp C_PP
-                &kp C_NEXT
+                &lt 1 W         /* Key 1: 点按W / 按住层1 */
+                &kp E           /* Key 2 */
+                &kp C_MUTE      /* Key 3 */
+                &kp C_PREV      /* Key 4 */
+                &kp C_PP        /* Key 5 */
+                &kp C_NEXT      /* Key 6 */
+                &kp C_VOL_UP    /* 旋钮顺时针: 音量加 */
+                &kp C_VOL_DN    /* 旋钮逆时针: 音量减 */
             >;
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         bt_layer {
             bindings = <
-                &none
-                &out OUT_USB
-                &out OUT_BLE
-                &bt BT_SEL 0
-                &bootloader
-                &bt BT_CLR
+                &none           /* Key 1 */
+                &out OUT_USB    /* Key 2 */
+                &out OUT_BLE    /* Key 3 */
+                &bt BT_SEL 0   /* Key 4 */
+                &bootloader     /* Key 5 */
+                &bt BT_CLR      /* Key 6 */
+                &bt BT_NXT      /* 旋钮顺时针: 下一个蓝牙 */
+                &bt BT_PRV      /* 旋钮逆时针: 上一个蓝牙 */
             >;
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
     };
 };
