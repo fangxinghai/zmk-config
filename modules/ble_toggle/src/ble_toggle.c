@@ -13,7 +13,9 @@
 #include <zmk/battery.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/events/sensor_event.h>
+#include <zmk/events/activity_state_changed.h>
 #include <zmk/event_manager.h>
+#include <zmk/activity.h>
 #include <zmk/sensors.h>
 
 LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
@@ -28,12 +30,14 @@ static const struct device *led_strip_dev;
 static struct led_rgb pixels[TOTAL_LEDS];
 
 static bool led_blink_on = true;
+static bool is_sleeping = false;
 
 enum led_state {
     LED_STATE_USB,
     LED_STATE_BLE_PAIRING,
     LED_STATE_BLE_CONNECTED,
     LED_STATE_LOW_BATTERY,
+    LED_STATE_OFF,
 };
 
 static enum led_state current_led_state = LED_STATE_USB;
@@ -51,31 +55,28 @@ static void set_led(uint8_t r, uint8_t g, uint8_t b) {
 static void update_status_led(void) {
     switch (current_led_state) {
         case LED_STATE_USB:
-            set_led(0, 50, 0);     /* 绿色常亮 */
+            set_led(0, 50, 0);
             break;
-
         case LED_STATE_BLE_PAIRING:
             if (led_blink_on) {
-                set_led(0, 0, 50);  /* 蓝色闪烁 */
+                set_led(0, 0, 50);
             } else {
                 set_led(0, 0, 0);
             }
             led_blink_on = !led_blink_on;
             break;
-
         case LED_STATE_BLE_CONNECTED:
-            set_led(0, 0, 50);     /* 蓝色常亮 */
+            set_led(0, 0, 50);
             break;
-
         case LED_STATE_LOW_BATTERY:
             if (led_blink_on) {
-                set_led(50, 0, 0);  /* 红色闪烁 */
+                set_led(50, 0, 0);
             } else {
                 set_led(0, 0, 0);
             }
             led_blink_on = !led_blink_on;
             break;
-
+        case LED_STATE_OFF:
         default:
             set_led(0, 0, 0);
             break;
@@ -83,31 +84,28 @@ static void update_status_led(void) {
 }
 
 /* ===================================================
- * 状态检测主循环（纯状态灯，不干预蓝牙）
- *
- * 蓝牙的开关完全交给 ZMK 内部管理：
- *   - USB 插入时 ZMK 自动走 USB
- *   - USB 拔出时 ZMK 自动切到 BLE 并广播
- *   - 用户通过 OUT_BLE / OUT_USB 手动切换
- *
- * 我们只读取状态来控制 LED 颜色，不做任何
- * bt_le_adv_stop / bt_le_adv_start 操作。
+ * 状态检测主循环
  * =================================================== */
 
 static void check_status(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(status_check_work, check_status);
 
 static void check_status(struct k_work *work) {
+    /* 如果已经在休眠/空闲，保持灯灭，不再调度 */
+    if (is_sleeping) {
+        current_led_state = LED_STATE_OFF;
+        update_status_led();
+        return;
+    }
+
     struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
     uint8_t battery_level = zmk_battery_state_of_charge();
 
-    /* 判断 LED 状态（优先级：低电量 > USB/BLE） */
     if (battery_level > 0 && battery_level < 10) {
         current_led_state = LED_STATE_LOW_BATTERY;
     } else if (endpoint.transport == ZMK_TRANSPORT_USB) {
         current_led_state = LED_STATE_USB;
     } else {
-        /* BLE 模式 */
         if (zmk_ble_active_profile_is_connected()) {
             current_led_state = LED_STATE_BLE_CONNECTED;
         } else {
@@ -117,7 +115,6 @@ static void check_status(struct k_work *work) {
 
     update_status_led();
 
-    /* 闪烁状态刷新更快 */
     if (current_led_state == LED_STATE_BLE_PAIRING ||
         current_led_state == LED_STATE_LOW_BATTERY) {
         k_work_schedule(&status_check_work, K_MSEC(500));
@@ -127,11 +124,51 @@ static void check_status(struct k_work *work) {
 }
 
 /* ===================================================
+ * 休眠/唤醒 事件监听
+ * =================================================== */
+
+static int activity_event_listener(const zmk_event_t *eh) {
+    struct zmk_activity_state_changed *activity_event =
+        as_zmk_activity_state_changed(eh);
+    if (activity_event == NULL) {
+        return ZMK_EV_EVENT_BUBBLE;
+    }
+
+    switch (activity_event->state) {
+        case ZMK_ACTIVITY_ACTIVE:
+            /* 唤醒 */
+            LOG_INF("Activity: ACTIVE - LED on");
+            is_sleeping = false;
+            k_work_schedule(&status_check_work, K_MSEC(100));
+            break;
+
+        case ZMK_ACTIVITY_IDLE:
+            /* 空闲（可选：空闲时也关灯） */
+            LOG_INF("Activity: IDLE - LED off");
+            is_sleeping = true;
+            k_work_cancel_delayable(&status_check_work);
+            current_led_state = LED_STATE_OFF;
+            update_status_led();
+            break;
+
+        case ZMK_ACTIVITY_SLEEP:
+            /* 深度休眠 */
+            LOG_INF("Activity: SLEEP - LED off");
+            is_sleeping = true;
+            k_work_cancel_delayable(&status_check_work);
+            current_led_state = LED_STATE_OFF;
+            update_status_led();
+            break;
+    }
+
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(activity_led, activity_event_listener);
+ZMK_SUBSCRIPTION(activity_led, zmk_activity_state_changed);
+
+/* ===================================================
  * 旋钮转虚拟按键
- *
- * 拦截 ZMK sensor event，转换为虚拟按键
- * 顺时针转一格 → position 6 按下+释放一次
- * 逆时针转一格 → position 7 按下+释放一次
  * =================================================== */
 
 #define ENCODER_CW_POSITION   6
@@ -169,11 +206,6 @@ static void ccw_work_handler(struct k_work *work) {
     encoder_virtual_press(ENCODER_CCW_POSITION);
 }
 
-/*
- * ZMK sensor event listener
- * 拦截 EC11 产生的 sensor event，判断方向，触发虚拟按键
- * 返回 ZMK_EV_EVENT_HANDLED 阻止 ZMK 继续处理
- */
 static int sensor_event_listener(const zmk_event_t *eh) {
     struct zmk_sensor_event *sensor_event = as_zmk_sensor_event(eh);
     if (sensor_event == NULL) {
@@ -218,9 +250,7 @@ static int ble_toggle_init(void) {
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    LOG_INF("BLE Toggle initialized (LED status only, no BLE control)");
-    LOG_INF("Encoder-to-Keys: CW=pos%d, CCW=pos%d",
-            ENCODER_CW_POSITION, ENCODER_CCW_POSITION);
+    LOG_INF("BLE Toggle + Encoder-to-Keys initialized");
 
     k_work_schedule(&status_check_work, K_SECONDS(5));
     return 0;
