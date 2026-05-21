@@ -1,5 +1,5 @@
 config CUSTOM_BLE_TOGGLE
-    bool "Custom BLE toggle + encoder to keys"
+    bool "Custom BLE toggle + encoder to keys + sleep LED"
     default y
     depends on BT
     depends on LED_STRIP
