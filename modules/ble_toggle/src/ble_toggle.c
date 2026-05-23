@@ -42,12 +42,12 @@ static bool is_sleeping = false;
  * 5个蓝牙配置 (0-4) 用不同饱和度/色调的蓝色区分：
  *
  *   配置 0 → 纯蓝       (0,   0,  50)  深蓝
- *   配置 1 → 偏靛蓝     (0,  15,  50)  加一点绿
- *   配置 2 → 偏青蓝     (0,  30,  50)  更多绿
- *   配置 3 → 偏紫蓝     (15,  0,  50)  加一点红
- *   配置 4 → 偏粉蓝     (30,  0,  50)  更多红
+ *   配置 1 → 靛蓝       (0,  15,  50)  加一点绿
+ *   配置 2 → 青蓝       (0,  30,  50)  更多绿
+ *   配置 3 → 紫蓝       (15,  0,  50)  加一点红
+ *   配置 4 → 粉蓝       (30,  0,  50)  更多红
  *
- * 这样肉眼能明显区分 5 种蓝色。
+ * 肉眼可明显区分 5 种蓝色。
  * =================================================== */
 
 #define BT_PROFILE_COUNT 5
@@ -95,13 +95,11 @@ static void check_status(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(status_check_work, check_status);
 
 static void check_status(struct k_work *work) {
-    /* 休眠：灭灯，不再调度 */
     if (is_sleeping) {
         status_led_off();
         return;
     }
 
-    /* 检测状态 */
     struct zmk_endpoint_instance ep = zmk_endpoint_get_selected();
     uint8_t batt = zmk_battery_state_of_charge();
     bool low_batt = (batt > 0 && batt < 10);
@@ -113,13 +111,9 @@ static void check_status(struct k_work *work) {
     }
     const struct led_rgb *bt_color = &bt_profile_colors[bt_profile];
 
-    /* 翻转闪烁相位 */
     blink_phase = !blink_phase;
 
-    /* ---- 按优先级渲染 ---- */
-
     if (low_batt) {
-        /* 低电量：红色闪烁 */
         if (blink_phase) {
             status_led_set(50, 0, 0);
         } else {
@@ -128,17 +122,14 @@ static void check_status(struct k_work *work) {
         k_work_schedule(&status_check_work, K_MSEC(500));
 
     } else if (usb) {
-        /* USB：绿色常亮 */
         status_led_set(0, 50, 0);
         k_work_schedule(&status_check_work, K_SECONDS(3));
 
     } else if (zmk_ble_active_profile_is_connected()) {
-        /* 蓝牙已连接：对应配置色常亮 */
         status_led_set_rgb(bt_color);
         k_work_schedule(&status_check_work, K_SECONDS(3));
 
     } else {
-        /* 蓝牙配对中：对应配置色闪烁 */
         if (blink_phase) {
             status_led_set_rgb(bt_color);
         } else {
@@ -179,29 +170,24 @@ ZMK_LISTENER(activity_led, activity_event_listener);
 ZMK_SUBSCRIPTION(activity_led, zmk_activity_state_changed);
 
 /* ===================================================
- * 旋钮转虚拟按键（带强制去抖）
+ * 旋钮转虚拟按键（计数分频去抖）
  *
- * 你的 EC11 无论 steps 怎么设都一格触发两次。
- * 用时间窗口强制吞掉第二次。
+ * EC11 每个物理 click 固定产生 2 次 sensor event。
+ * 不用时间窗口，每 2 次 event 才触发 1 次按键。
+ * 快拧不丢步，慢拧不重复。
  *
- * ENCODER_LOCK_MS:
- *   有效触发后锁定此时间，同方向再来的丢弃。
- *   正常手速一格约 80-200ms，60ms 能吞抖动不丢快拧。
- *   还双触发 → 70, 80
- *   快拧丢步 → 50, 45
- *
- * ENCODER_REVERSE_LOCK_MS:
- *   方向反转后的额外锁定，防 detent 边缘假反转。
+ * ENCODER_EVENTS_PER_CLICK:
+ *   每个物理 click 产生的 event 次数。
+ *   当前硬件固定 2 次。换编码器可调。
  * =================================================== */
 
 #define ENCODER_CW_POSITION       6
 #define ENCODER_CCW_POSITION      7
 #define VIRTUAL_KEY_PRESS_MS      5
-#define ENCODER_LOCK_MS           200
-#define ENCODER_REVERSE_LOCK_MS   250
+#define ENCODER_EVENTS_PER_CLICK  2
 
-static int64_t enc_last_accepted_time = 0;
-static int     enc_last_direction     = 0;
+static int enc_counter = 0;
+static int enc_last_direction = 0;
 
 static void encoder_virtual_press(uint32_t position) {
     LOG_INF("Encoder virtual press: position=%d", position);
@@ -247,34 +233,29 @@ static int sensor_event_listener(const zmk_event_t *eh) {
             if (value == 0) return ZMK_EV_EVENT_HANDLED;
 
             int direction = (value > 0) ? 1 : -1;
-            int64_t now = k_uptime_get();
-            int64_t elapsed = now - enc_last_accepted_time;
 
-            /* 去抖: 同方向锁定 */
-            if (direction == enc_last_direction) {
-                if (elapsed < ENCODER_LOCK_MS) {
-                    LOG_DBG("Encoder: same-dir %lld ms, dropped", elapsed);
-                    return ZMK_EV_EVENT_HANDLED;
-                }
-            }
-            /* 去抖: 反转锁定 */
-            else if (enc_last_direction != 0) {
-                if (elapsed < ENCODER_REVERSE_LOCK_MS) {
-                    LOG_DBG("Encoder: reverse %lld ms, dropped", elapsed);
-                    return ZMK_EV_EVENT_HANDLED;
-                }
+            /* 方向反转：重置计数器，防止跨方向凑数 */
+            if (direction != enc_last_direction) {
+                enc_counter = 0;
+                enc_last_direction = direction;
             }
 
-            /* 通过去抖 */
-            enc_last_direction = direction;
-            enc_last_accepted_time = now;
+            enc_counter++;
 
-            LOG_INF("Encoder accepted: dir=%d, elapsed=%lld", direction, elapsed);
+            LOG_DBG("Encoder: dir=%d, count=%d/%d",
+                    direction, enc_counter, ENCODER_EVENTS_PER_CLICK);
 
-            if (direction > 0) {
-                k_work_submit(&cw_work);
-            } else {
-                k_work_submit(&ccw_work);
+            /* 达到阈值：触发按键，重置计数 */
+            if (enc_counter >= ENCODER_EVENTS_PER_CLICK) {
+                enc_counter = 0;
+
+                LOG_INF("Encoder fire: dir=%d", direction);
+
+                if (direction > 0) {
+                    k_work_submit(&cw_work);
+                } else {
+                    k_work_submit(&ccw_work);
+                }
             }
 
             return ZMK_EV_EVENT_HANDLED;
@@ -291,7 +272,6 @@ ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
  * =================================================== */
 
 static int ble_toggle_init(void) {
-    /* 状态灯: SPI2 上的独立设备 */
     status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
     if (!device_is_ready(status_led_dev)) {
         LOG_WRN("Status LED (P0.29) not ready");
@@ -302,7 +282,7 @@ static int ble_toggle_init(void) {
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    LOG_INF("Status LED + Encoder (with debounce) initialized");
+    LOG_INF("Status LED + Encoder (count-divider debounce) initialized");
     LOG_INF("Backlight managed by ZMK RGB underglow");
 
     k_work_schedule(&status_check_work, K_SECONDS(3));
