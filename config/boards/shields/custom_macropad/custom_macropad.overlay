@@ -1,8 +1,9 @@
 /*
  * Custom Macropad Shield Overlay
- * MCU: nRF52840 (nice!nano v2)
+ * MCU: nRF52840
  * 6 Keys + 1 Rotary Encoder (2 virtual keys) = 8 positions
- * 6个按键 + 1个旋钮（2个虚拟键位）= 8个position
+ * 6x WS2812 backlight (P0.17, SPI3) → ZMK RGB underglow
+ * 1x WS2812 status LED (P0.29, SPI2) → custom C module
  */
 
 #include <behaviors.dtsi>
@@ -18,6 +19,7 @@
         zmk,kscan = &kscan0;
         zmk,physical-layout = &physical_layout0;
         zmk,battery = &vbatt;
+        zmk,underglow = &backlight_strip;   /* 6颗背光交给 ZMK RGB underglow */
     };
 
     vbatt: vbatt {
@@ -54,30 +56,18 @@
         map = <0 1 2 3 4 5 6 7>;
     };
 
-    /*
-     * Physical Layout for ZMK Studio
-     *
-     *  ┌─────────────────┐    ┌──────────┐
-     *  │ [1]  [2]  [3]   │    │  [CW]    │
-     *  │ [4]  [5]  [6]   │    │  [CCW]   │
-     *  └─────────────────┘    └──────────┘
-     *    6 Keys (3x2)         1 Encoder
-     *    6个按键(3列2行)       1个旋钮
-     */
     physical_layout0: physical_layout_0 {
         compatible = "zmk,physical-layout";
         display-name = "Default Layout";
         transform = <&direct_transform>;
         kscan = <&kscan0>;
         keys =
-            /* ---- 左侧 6 键区 (3x2) ---- */
             <&key_physical_attrs 100 100   0   0   0 0 0>,   /* Key 1 */
             <&key_physical_attrs 100 100 100   0   0 0 0>,   /* Key 2 */
             <&key_physical_attrs 100 100 200   0   0 0 0>,   /* Key 3 */
             <&key_physical_attrs 100 100   0 100   0 0 0>,   /* Key 4 */
             <&key_physical_attrs 100 100 100 100   0 0 0>,   /* Key 5 */
             <&key_physical_attrs 100 100 200 100   0 0 0>,   /* Key 6 */
-            /* ---- 右侧旋钮区（间隔50） ---- */
             <&key_physical_attrs 100 100 350   0   0 0 0>,   /* Encoder CW  */
             <&key_physical_attrs 100 100 350 100   0 0 0>    /* Encoder CCW */
             ;
@@ -87,7 +77,7 @@
         compatible = "alps,ec11";
         a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         b-gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-        steps = <12>;
+        steps = <24>;
         status = "okay";
     };
 
@@ -98,7 +88,10 @@
     };
 };
 
-/* WS2812 状态灯 */
+/* ============================================================
+ * SPI3: 6颗背光 WS2812, P0.17, RGB 顺序
+ * → 由 ZMK RGB underglow 接管
+ * ============================================================ */
 &spi3 {
     compatible = "nordic,nrf-spim";
     status = "okay";
@@ -107,30 +100,72 @@
     pinctrl-1 = <&spi3_sleep>;
     pinctrl-names = "default", "sleep";
 
-    led_strip: ws2812@0 {
+    backlight_strip: ws2812@0 {
         compatible = "worldsemi,ws2812-spi";
-        label = "WS2812";
+        label = "WS2812_BACKLIGHT";
+        reg = <0>;
+        spi-max-frequency = <4000000>;
+        chain-length = <6>;
+        spi-one-frame = <0x70>;
+        spi-zero-frame = <0x40>;
+        color-mapping = <LED_COLOR_ID_RED
+                         LED_COLOR_ID_GREEN
+                         LED_COLOR_ID_BLUE>;
+    };
+};
+
+/* ============================================================
+ * SPI2: 1颗状态灯 WS2812, P0.29, RGB 顺序
+ * → 由自定义 C 模块控制
+ * ============================================================ */
+&spi2 {
+    compatible = "nordic,nrf-spim";
+    status = "okay";
+
+    pinctrl-0 = <&spi2_default>;
+    pinctrl-1 = <&spi2_sleep>;
+    pinctrl-names = "default", "sleep";
+
+    status_led: ws2812@0 {
+        compatible = "worldsemi,ws2812-spi";
+        label = "WS2812_STATUS";
         reg = <0>;
         spi-max-frequency = <4000000>;
         chain-length = <1>;
         spi-one-frame = <0x70>;
         spi-zero-frame = <0x40>;
-        color-mapping = <LED_COLOR_ID_GREEN
-                         LED_COLOR_ID_RED
+        color-mapping = <LED_COLOR_ID_RED
+                         LED_COLOR_ID_GREEN
                          LED_COLOR_ID_BLUE>;
     };
 };
 
+/* ============================================================
+ * pinctrl
+ * ============================================================ */
 &pinctrl {
+    /* SPI3 MOSI → P0.17 (背光) */
     spi3_default: spi3_default {
         group1 {
             psels = <NRF_PSEL(SPIM_MOSI, 0, 17)>;
         };
     };
-
     spi3_sleep: spi3_sleep {
         group1 {
             psels = <NRF_PSEL(SPIM_MOSI, 0, 17)>;
+            low-power-enable;
+        };
+    };
+
+    /* SPI2 MOSI → P0.29 (状态灯) */
+    spi2_default: spi2_default {
+        group1 {
+            psels = <NRF_PSEL(SPIM_MOSI, 0, 29)>;
+        };
+    };
+    spi2_sleep: spi2_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIM_MOSI, 0, 29)>;
             low-power-enable;
         };
     };
