@@ -91,7 +91,6 @@ static void check_status(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(status_check_work, check_status);
 
 static void check_status(struct k_work *work) {
-    /* 如果已经在休眠/空闲，保持灯灭，不再调度 */
     if (is_sleeping) {
         current_led_state = LED_STATE_OFF;
         update_status_led();
@@ -136,14 +135,12 @@ static int activity_event_listener(const zmk_event_t *eh) {
 
     switch (activity_event->state) {
         case ZMK_ACTIVITY_ACTIVE:
-            /* 唤醒 */
             LOG_INF("Activity: ACTIVE - LED on");
             is_sleeping = false;
             k_work_schedule(&status_check_work, K_MSEC(100));
             break;
 
         case ZMK_ACTIVITY_IDLE:
-            /* 空闲（可选：空闲时也关灯） */
             LOG_INF("Activity: IDLE - LED off");
             is_sleeping = true;
             k_work_cancel_delayable(&status_check_work);
@@ -152,7 +149,6 @@ static int activity_event_listener(const zmk_event_t *eh) {
             break;
 
         case ZMK_ACTIVITY_SLEEP:
-            /* 深度休眠 */
             LOG_INF("Activity: SLEEP - LED off");
             is_sleeping = true;
             k_work_cancel_delayable(&status_check_work);
@@ -168,12 +164,33 @@ ZMK_LISTENER(activity_led, activity_event_listener);
 ZMK_SUBSCRIPTION(activity_led, zmk_activity_state_changed);
 
 /* ===================================================
- * 旋钮转虚拟按键
+ * 旋钮转虚拟按键 (带软件去抖)
  * =================================================== */
 
 #define ENCODER_CW_POSITION   6
 #define ENCODER_CCW_POSITION  7
 #define VIRTUAL_KEY_PRESS_MS  5
+
+/* -------- 去抖参数（可根据手感微调）-------- *
+ *
+ *  ENCODER_DEBOUNCE_MS:
+ *      同方向两次触发的最小间隔，低于此值的脉冲视为抖动丢弃。
+ *      正常手速拧一格约 60-150ms，设 30ms 能滤掉绝大部分抖动。
+ *      如果还有多触发 → 往上调（40、50）
+ *      如果快速连拧丢步 → 往下调（20、15）
+ *
+ *  ENCODER_REVERSE_LOCKOUT_MS:
+ *      方向反转后的锁定窗口。在 detent 边缘，触点可能
+ *      短暂来回跳变产生假的"反转"，此窗口内的反转事件被丢弃。
+ *      如果旋钮停着不动偶尔自己跳一下 → 往上调（120、150）
+ */
+#define ENCODER_DEBOUNCE_MS          30
+#define ENCODER_REVERSE_LOCKOUT_MS   80
+
+/* 去抖状态变量 */
+static int64_t enc_last_trigger_time    = 0;   /* 上次成功触发的时间戳 */
+static int     enc_last_direction       = 0;   /* +1=CW, -1=CCW, 0=初始 */
+static int64_t enc_last_reverse_time    = 0;   /* 上次方向改变的时间戳 */
 
 static void encoder_virtual_press(uint32_t position) {
     LOG_INF("Encoder virtual press: position=%d", position);
@@ -218,13 +235,50 @@ static int sensor_event_listener(const zmk_event_t *eh) {
     for (int i = 0; i < channel_data_size; i++) {
         if (channel_data[i].channel == SENSOR_CHAN_ROTATION) {
             int value = sensor_value_to_micro(&channel_data[i].value);
-            LOG_INF("Sensor rotation: value=%d", value);
+            LOG_INF("Sensor rotation raw: value=%d", value);
 
-            if (value > 0) {
+            if (value == 0) {
+                return ZMK_EV_EVENT_HANDLED;
+            }
+
+            /* ---- 去抖逻辑开始 ---- */
+            int direction = (value > 0) ? 1 : -1;
+            int64_t now = k_uptime_get();
+
+            /* 过滤层1：方向反转锁定
+             * 如果距离上次方向改变时间太短，认为是 detent 边缘抖动 */
+            if (enc_last_direction != 0 && direction != enc_last_direction) {
+                if ((now - enc_last_reverse_time) < ENCODER_REVERSE_LOCKOUT_MS) {
+                    LOG_DBG("Encoder debounce: reverse too fast, dropped");
+                    return ZMK_EV_EVENT_HANDLED;
+                }
+                /* 真正的反转，记录时间并重置 */
+                enc_last_reverse_time = now;
+            }
+
+            /* 过滤层2：同方向最小间隔去抖
+             * 同一方向上两次触发间隔太短，认为是机械抖动 */
+            if (direction == enc_last_direction) {
+                if ((now - enc_last_trigger_time) < ENCODER_DEBOUNCE_MS) {
+                    LOG_DBG("Encoder debounce: same-dir too fast (%lld ms), dropped",
+                            now - enc_last_trigger_time);
+                    return ZMK_EV_EVENT_HANDLED;
+                }
+            }
+
+            /* ---- 去抖通过，记录状态并触发按键 ---- */
+            enc_last_direction = direction;
+            enc_last_trigger_time = now;
+
+            LOG_INF("Encoder accepted: dir=%d", direction);
+
+            if (direction > 0) {
                 k_work_submit(&cw_work);
-            } else if (value < 0) {
+            } else {
                 k_work_submit(&ccw_work);
             }
+            /* ---- 去抖逻辑结束 ---- */
+
             return ZMK_EV_EVENT_HANDLED;
         }
     }
@@ -250,7 +304,7 @@ static int ble_toggle_init(void) {
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    LOG_INF("BLE Toggle + Encoder-to-Keys initialized");
+    LOG_INF("BLE Toggle + Encoder-to-Keys initialized (with debounce)");
 
     k_work_schedule(&status_check_work, K_SECONDS(5));
     return 0;
