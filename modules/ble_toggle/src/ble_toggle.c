@@ -197,8 +197,8 @@ ZMK_SUBSCRIPTION(activity_led, zmk_activity_state_changed);
 #define ENCODER_CW_POSITION       6
 #define ENCODER_CCW_POSITION      7
 #define VIRTUAL_KEY_PRESS_MS      5
-#define ENCODER_LOCK_MS           60
-#define ENCODER_REVERSE_LOCK_MS   100
+#define ENCODER_LOCK_MS           200
+#define ENCODER_REVERSE_LOCK_MS   250
 
 static int64_t enc_last_accepted_time = 0;
 static int     enc_last_direction     = 0;
