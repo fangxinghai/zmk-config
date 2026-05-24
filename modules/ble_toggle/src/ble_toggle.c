@@ -21,70 +21,74 @@
 LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* ===================================================
- * WS2812 状态灯
+ * 状态灯硬件：1颗 WS2812, P0.29, SPI2
+ *
+ * 与背光灯完全独立：
+ *   背光灯 (P0.17, SPI3) → ZMK RGB underglow 管理
+ *   状态灯 (P0.29, SPI2) → 本模块管理
  * =================================================== */
 
-#define TOTAL_LEDS 1
+#define STATUS_LEDS 1
 
-static const struct device *led_strip_dev;
-static struct led_rgb pixels[TOTAL_LEDS];
+static const struct device *status_led_dev;
+static struct led_rgb status_pixel[STATUS_LEDS];
 
-static bool led_blink_on = true;
+static bool blink_phase = true;
 static bool is_sleeping = false;
 
 /* ===================================================
  * 蓝牙配置颜色方案
  *
- * 5个蓝牙配置 (0-4) 用从深到浅的蓝色区分：
+ * 5个蓝牙配置 (0-4) 用不同饱和度/色调的蓝色区分：
  *
- *   配置 0 → 最深蓝  (0,  0, 50)  纯蓝，无混色
- *   配置 1 → 深蓝    (5,  5, 50)  微微偏白
- *   配置 2 → 中蓝    (12, 12, 50) 明显偏浅
- *   配置 3 → 浅蓝    (22, 22, 50) 接近天蓝
- *   配置 4 → 最浅蓝  (35, 35, 50) 接近白蓝
+ *   配置 0 → 纯蓝       (0,   0,  50)  深蓝
+ *   配置 1 → 靛蓝       (0,  15,  50)  加一点绿
+ *   配置 2 → 青蓝       (0,  30,  50)  更多绿
+ *   配置 3 → 紫蓝       (15,  0,  50)  加一点红
+ *   配置 4 → 粉蓝       (30,  0,  50)  更多红
  *
- * 越往后越浅（加白光降饱和度），肉眼可区分。
+ * 肉眼可明显区分 5 种蓝色。
  * =================================================== */
 
 #define BT_PROFILE_COUNT 5
 
-static const struct led_rgb bt_colors[BT_PROFILE_COUNT] = {
-    { .r = 0,  .g = 0,  .b = 50 },   /* 配置 0: 最深蓝 (纯蓝) */
-    { .r = 5,  .g = 5,  .b = 50 },   /* 配置 1: 深蓝 */
-    { .r = 12, .g = 12, .b = 50 },   /* 配置 2: 中蓝 */
-    { .r = 22, .g = 22, .b = 50 },   /* 配置 3: 浅蓝 */
-    { .r = 35, .g = 35, .b = 50 },   /* 配置 4: 最浅蓝 (白蓝) */
+static const struct led_rgb bt_profile_colors[BT_PROFILE_COUNT] = {
+    { .r = 0,  .g = 0,  .b = 50 },   /* 配置 0: 纯蓝 */
+    { .r = 0,  .g = 15, .b = 50 },   /* 配置 1: 靛蓝 */
+    { .r = 0,  .g = 30, .b = 50 },   /* 配置 2: 青蓝 */
+    { .r = 15, .g = 0,  .b = 50 },   /* 配置 3: 紫蓝 */
+    { .r = 30, .g = 0,  .b = 50 },   /* 配置 4: 粉蓝 */
 };
 
 /* ===================================================
  * 状态灯控制
  * =================================================== */
 
-static void set_led(uint8_t r, uint8_t g, uint8_t b) {
-    if (led_strip_dev == NULL) return;
-    pixels[0].r = r;
-    pixels[0].g = g;
-    pixels[0].b = b;
-    led_strip_update_rgb(led_strip_dev, pixels, TOTAL_LEDS);
+static void status_led_set(uint8_t r, uint8_t g, uint8_t b) {
+    if (status_led_dev == NULL) return;
+    status_pixel[0].r = r;
+    status_pixel[0].g = g;
+    status_pixel[0].b = b;
+    led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
 }
 
-static void set_led_off(void) {
-    set_led(0, 0, 0);
+static void status_led_off(void) {
+    status_led_set(0, 0, 0);
 }
 
-static void set_led_rgb(const struct led_rgb *c) {
-    set_led(c->r, c->g, c->b);
+static void status_led_set_rgb(const struct led_rgb *c) {
+    status_led_set(c->r, c->g, c->b);
 }
 
 /* ===================================================
- * 状态检测主循环
+ * 主状态检测循环
  *
  * 优先级 (高→低):
  *   1. 休眠        → 灭
  *   2. 低电量 <10% → 红色闪烁
  *   3. USB         → 绿色常亮
- *   4. 蓝牙配对中  → 对应配置的蓝色闪烁
- *   5. 蓝牙已连接  → 对应配置的蓝色常亮
+ *   4. 蓝牙配对中  → 对应配置色闪烁
+ *   5. 蓝牙已连接  → 对应配置色常亮
  * =================================================== */
 
 static void check_status(struct k_work *work);
@@ -92,87 +96,70 @@ K_WORK_DELAYABLE_DEFINE(status_check_work, check_status);
 
 static void check_status(struct k_work *work) {
     if (is_sleeping) {
-        set_led_off();
+        status_led_off();
         return;
     }
 
-    struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
-    uint8_t battery_level = zmk_battery_state_of_charge();
-    bool low_batt = (battery_level > 0 && battery_level < 10);
-    bool usb = (endpoint.transport == ZMK_TRANSPORT_USB);
+    struct zmk_endpoint_instance ep = zmk_endpoint_get_selected();
+    uint8_t batt = zmk_battery_state_of_charge();
+    bool low_batt = (batt > 0 && batt < 10);
+    bool usb = (ep.transport == ZMK_TRANSPORT_USB);
 
-    /* 获取当前蓝牙配置号对应的颜色 */
     int bt_profile = zmk_ble_active_profile_index();
     if (bt_profile < 0 || bt_profile >= BT_PROFILE_COUNT) {
         bt_profile = 0;
     }
-    const struct led_rgb *bt_color = &bt_colors[bt_profile];
+    const struct led_rgb *bt_color = &bt_profile_colors[bt_profile];
 
-    /* 翻转闪烁相位 */
-    led_blink_on = !led_blink_on;
-
-    /* ---- 按优先级渲染 ---- */
+    blink_phase = !blink_phase;
 
     if (low_batt) {
-        /* 低电量：红色闪烁 */
-        if (led_blink_on) {
-            set_led(50, 0, 0);
+        if (blink_phase) {
+            status_led_set(50, 0, 0);
         } else {
-            set_led_off();
+            status_led_off();
         }
         k_work_schedule(&status_check_work, K_MSEC(500));
 
     } else if (usb) {
-        /* USB：绿色常亮 */
-        set_led(0, 50, 0);
+        status_led_set(0, 50, 0);
         k_work_schedule(&status_check_work, K_SECONDS(3));
 
     } else if (zmk_ble_active_profile_is_connected()) {
-        /* 蓝牙已连接：对应配置的蓝色常亮 */
-        set_led_rgb(bt_color);
+        status_led_set_rgb(bt_color);
         k_work_schedule(&status_check_work, K_SECONDS(3));
 
     } else {
-        /* 蓝牙配对中：对应配置的蓝色闪烁 */
-        if (led_blink_on) {
-            set_led_rgb(bt_color);
+        if (blink_phase) {
+            status_led_set_rgb(bt_color);
         } else {
-            set_led_off();
+            status_led_off();
         }
         k_work_schedule(&status_check_work, K_MSEC(500));
     }
 }
 
 /* ===================================================
- * 休眠/唤醒 事件监听
+ * 休眠/唤醒
  * =================================================== */
 
 static int activity_event_listener(const zmk_event_t *eh) {
-    struct zmk_activity_state_changed *activity_event =
-        as_zmk_activity_state_changed(eh);
-    if (activity_event == NULL) {
-        return ZMK_EV_EVENT_BUBBLE;
-    }
+    struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
+    if (ev == NULL) return ZMK_EV_EVENT_BUBBLE;
 
-    switch (activity_event->state) {
+    switch (ev->state) {
         case ZMK_ACTIVITY_ACTIVE:
-            LOG_INF("Activity: ACTIVE - LED on");
+            LOG_INF("Activity: ACTIVE");
             is_sleeping = false;
             k_work_schedule(&status_check_work, K_MSEC(100));
             break;
 
         case ZMK_ACTIVITY_IDLE:
-            LOG_INF("Activity: IDLE - LED off");
-            is_sleeping = true;
-            k_work_cancel_delayable(&status_check_work);
-            set_led_off();
-            break;
-
         case ZMK_ACTIVITY_SLEEP:
-            LOG_INF("Activity: SLEEP - LED off");
+            LOG_INF("Activity: IDLE/SLEEP - status LED off");
             is_sleeping = true;
             k_work_cancel_delayable(&status_check_work);
-            set_led_off();
+            status_led_off();
             break;
     }
 
@@ -346,19 +333,20 @@ ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
  * =================================================== */
 
 static int ble_toggle_init(void) {
-    led_strip_dev = DEVICE_DT_GET(DT_NODELABEL(led_strip));
-    if (!device_is_ready(led_strip_dev)) {
-        LOG_WRN("LED strip not ready");
-        led_strip_dev = NULL;
+    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
+    if (!device_is_ready(status_led_dev)) {
+        LOG_WRN("Status LED (P0.29) not ready");
+        status_led_dev = NULL;
     }
-    memset(pixels, 0, sizeof(pixels));
+    memset(status_pixel, 0, sizeof(status_pixel));
 
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    LOG_INF("BLE Toggle + Encoder-to-Keys initialized");
+    LOG_INF("Status LED + Encoder (count-divider + reverse-protect) initialized");
+    LOG_INF("Backlight managed by ZMK RGB underglow");
 
-    k_work_schedule(&status_check_work, K_MSEC(500));
+    k_work_schedule(&status_check_work, K_SECONDS(3));
     return 0;
 }
 
