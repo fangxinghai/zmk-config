@@ -1,3 +1,6 @@
+/* NRF52840 GPREGRET 寄存器直接地址，零依赖，任何版本通用 */
+#define NRF_POWER_GPREGRET  (*(volatile uint32_t *)0x40000051UL)
+
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
@@ -6,8 +9,6 @@
 #include <zephyr/device.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
-#include <zephyr/sys/reboot.h>    // 已有
-#include <nrf_power.h>            // ← 换成这个
 #include <zmk/ble.h>
 #include <zmk/usb.h>
 #include <zmk/endpoints_types.h>
@@ -256,7 +257,9 @@ static int sensor_event_listener(const zmk_event_t *eh) {
 
     for (int i = 0; i < channel_data_size; i++) {
         if (channel_data[i].channel == SENSOR_CHAN_ROTATION) {
-            int value = sensor_value_to_micro(&channel_data[i].value);
+            /* ② 修复 packed member 对齐 warning */
+            struct sensor_value val_copy = channel_data[i].value;
+            int value = sensor_value_to_micro(&val_copy);
             if (value == 0) return ZMK_EV_EVENT_HANDLED;
 
             int direction = (value > 0) ? 1 : -1;
@@ -335,23 +338,5 @@ ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
  * =================================================== */
 
 static int ble_toggle_init(void) {
-    // ✅ 新增：上电后立即清除 GPREGRET，防止 Bootloader 下次误判进 DFU
-    NRF_POWER->GPREGRET = 0x00; 
-    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
-    if (!device_is_ready(status_led_dev)) {
-        LOG_WRN("Status LED (P0.29) not ready");
-        status_led_dev = NULL;
-    }
-    memset(status_pixel, 0, sizeof(status_pixel));
-
-    k_work_init(&cw_work, cw_work_handler);
-    k_work_init(&ccw_work, ccw_work_handler);
-
-    LOG_INF("Status LED + Encoder (count-divider + reverse-protect) initialized");
-    LOG_INF("Backlight managed by ZMK RGB underglow");
-
-    k_work_schedule(&status_check_work, K_SECONDS(3));
-    return 0;
-}
-
-SYS_INIT(ble_toggle_init, APPLICATION, 99);
+    /* ③ 清除 GPREGRET，防止重启后进入 Bootloader
+     * 直接写寄存器地址，零依赖，所有 nr
