@@ -6,8 +6,8 @@
 #include <zephyr/device.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
-#include <nrfx_power.h>          // ← 新增这一行
-#include <hal/nrf_power.h>
+#include <zephyr/sys/reboot.h>    // 已有
+#include <nrf_power.h>            // ← 换成这个
 #include <zmk/ble.h>
 #include <zmk/usb.h>
 #include <zmk/endpoints_types.h>
@@ -336,7 +336,7 @@ ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
 
 static int ble_toggle_init(void) {
     // ✅ 新增：上电后立即清除 GPREGRET，防止 Bootloader 下次误判进 DFU
-    nrf_power_gpregret_set(NRF_POWER, 0x00);
+    NRF_POWER->GPREGRET = 0x00; 
     status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
     if (!device_is_ready(status_led_dev)) {
         LOG_WRN("Status LED (P0.29) not ready");
