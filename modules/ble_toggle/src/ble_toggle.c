@@ -18,6 +18,21 @@
 #include <zmk/activity.h>
 #include <zmk/sensors.h>
 
+#include <zephyr/kernel.h>
+#include <zephyr/bluetooth/bluetooth.h>
+// ... 你的其他 include ...
+#include <zmk/sensors.h>
+
+/* ★ 这一行必须要有 ★ */
+#define NRF_POWER_GPREGRET_REG  (*(volatile uint32_t *)0x40000051UL)
+
+LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
+
+// ... 其余代码 ...
+
+
+
+
 LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* ===================================================
