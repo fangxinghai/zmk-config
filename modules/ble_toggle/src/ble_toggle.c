@@ -354,7 +354,7 @@ static int ble_toggle_init(void) {
     NRF_POWER_GPREGRET_REG = 0x00UL;
 
     /* 初始化状态灯 */
-    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
+    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(led_strip));
     if (!device_is_ready(status_led_dev)) {
         status_led_dev = NULL;
     }
