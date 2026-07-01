@@ -18,10 +18,15 @@
 #include <zmk/activity.h>
 #include <zmk/sensors.h>
 
-/* NRF52840 GPREGRET 寄存器直接地址，零依赖 */
-#define NRF_POWER_GPREGRET_REG  (*(volatile uint32_t *)0x40000051UL)
-
 LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
+
+/* ===================================================
+ * 状态灯硬件：1颗 WS2812, P0.29, SPI2
+ *
+ * 与背光灯完全独立：
+ *   背光灯 (P0.17, SPI3) → ZMK RGB underglow 管理
+ *   状态灯 (P0.29, SPI2) → 本模块管理
+ * =================================================== */
 
 #define STATUS_LEDS 1
 
@@ -31,15 +36,33 @@ static struct led_rgb status_pixel[STATUS_LEDS];
 static bool blink_phase = true;
 static bool is_sleeping = false;
 
+/* ===================================================
+ * 蓝牙配置颜色方案
+ *
+ * 5个蓝牙配置 (0-4) 用不同饱和度/色调的蓝色区分：
+ *
+ *   配置 0 → 纯蓝       (0,   0,  50)  深蓝
+ *   配置 1 → 靛蓝       (0,  15,  50)  加一点绿
+ *   配置 2 → 青蓝       (0,  30,  50)  更多绿
+ *   配置 3 → 紫蓝       (15,  0,  50)  加一点红
+ *   配置 4 → 粉蓝       (30,  0,  50)  更多红
+ *
+ * 肉眼可明显区分 5 种蓝色。
+ * =================================================== */
+
 #define BT_PROFILE_COUNT 5
 
 static const struct led_rgb bt_profile_colors[BT_PROFILE_COUNT] = {
-    { .r = 0,  .g = 0,  .b = 50 },
-    { .r = 0,  .g = 15, .b = 50 },
-    { .r = 0,  .g = 30, .b = 50 },
-    { .r = 15, .g = 0,  .b = 50 },
-    { .r = 30, .g = 0,  .b = 50 },
+    { .r = 0,  .g = 0,  .b = 50 },   /* 配置 0: 纯蓝 */
+    { .r = 0,  .g = 15, .b = 50 },   /* 配置 1: 靛蓝 */
+    { .r = 0,  .g = 30, .b = 50 },   /* 配置 2: 青蓝 */
+    { .r = 15, .g = 0,  .b = 50 },   /* 配置 3: 紫蓝 */
+    { .r = 30, .g = 0,  .b = 50 },   /* 配置 4: 粉蓝 */
 };
+
+/* ===================================================
+ * 状态灯控制
+ * =================================================== */
 
 static void status_led_set(uint8_t r, uint8_t g, uint8_t b) {
     if (status_led_dev == NULL) return;
@@ -56,6 +79,17 @@ static void status_led_off(void) {
 static void status_led_set_rgb(const struct led_rgb *c) {
     status_led_set(c->r, c->g, c->b);
 }
+
+/* ===================================================
+ * 主状态检测循环
+ *
+ * 优先级 (高→低):
+ *   1. 休眠        → 灭
+ *   2. 低电量 <10% → 红色闪烁
+ *   3. USB         → 绿色常亮
+ *   4. 蓝牙配对中  → 对应配置色闪烁
+ *   5. 蓝牙已连接  → 对应配置色常亮
+ * =================================================== */
 
 static void check_status(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(status_check_work, check_status);
@@ -105,6 +139,10 @@ static void check_status(struct k_work *work) {
     }
 }
 
+/* ===================================================
+ * 休眠/唤醒
+ * =================================================== */
+
 static int activity_event_listener(const zmk_event_t *eh) {
     struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
     if (ev == NULL) return ZMK_EV_EVENT_BUBBLE;
@@ -130,6 +168,31 @@ static int activity_event_listener(const zmk_event_t *eh) {
 
 ZMK_LISTENER(activity_led, activity_event_listener);
 ZMK_SUBSCRIPTION(activity_led, zmk_activity_state_changed);
+
+/* ===================================================
+ * 旋钮转虚拟按键（计数分频 + 反转保护）
+ *
+ * 两层防御：
+ *
+ * 1. 计数分频：
+ *    EC11 每个物理 click 固定产生 2 次 event，
+ *    每 2 次同方向 event 才触发 1 次按键。
+ *
+ * 2. 反转保护：
+ *    慢拧时 detent 边缘可能产生 1 次假反向脉冲。
+ *    方向反转后不立刻执行，要求连续收到
+ *    REVERSE_CONFIRM_COUNT 次同方向 event 才确认反转。
+ *    如果确认前又收到原方向 event，说明是假反转，
+ *    丢弃之前的反向 event，恢复原方向计数。
+ *
+ * ENCODER_EVENTS_PER_CLICK:
+ *    每格固定 2 次 event。换编码器可调。
+ *
+ * REVERSE_CONFIRM_COUNT:
+ *    反转后需要连续多少次同方向 event 才确认。
+ *    设 2 = 必须连续 2 次反向才承认反转（1 次反向丢弃）。
+ *    这能过滤掉 detent 边缘的单次假反转脉冲。
+ * =================================================== */
 
 #define ENCODER_CW_POSITION         6
 #define ENCODER_CCW_POSITION        7
@@ -191,12 +254,12 @@ static int sensor_event_listener(const zmk_event_t *eh) {
 
     for (int i = 0; i < channel_data_size; i++) {
         if (channel_data[i].channel == SENSOR_CHAN_ROTATION) {
-            struct sensor_value val_copy = channel_data[i].value;
-            int value = sensor_value_to_micro(&val_copy);
+            int value = sensor_value_to_micro(&channel_data[i].value);
             if (value == 0) return ZMK_EV_EVENT_HANDLED;
 
             int direction = (value > 0) ? 1 : -1;
 
+            /* ---- 初始状态：第一次收到 event ---- */
             if (enc_confirmed_dir == 0) {
                 enc_confirmed_dir = direction;
                 enc_fire_counter = 1;
@@ -210,6 +273,7 @@ static int sensor_event_listener(const zmk_event_t *eh) {
                 return ZMK_EV_EVENT_HANDLED;
             }
 
+            /* ---- 同方向：正常计数 ---- */
             if (direction == enc_confirmed_dir) {
                 if (enc_pending_count > 0) {
                     LOG_DBG("Encoder: false reverse discarded (pending=%d)", enc_pending_count);
@@ -229,6 +293,7 @@ static int sensor_event_listener(const zmk_event_t *eh) {
                 return ZMK_EV_EVENT_HANDLED;
             }
 
+            /* ---- 反方向：进入待确认流程 ---- */
             if (enc_pending_dir == direction) {
                 enc_pending_count++;
             } else {
@@ -263,9 +328,42 @@ static int sensor_event_listener(const zmk_event_t *eh) {
 ZMK_LISTENER(encoder_to_keys, sensor_event_listener);
 ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
 
+/* ===================================================
+ * 初始化
+ * =================================================== */
+
 static int ble_toggle_init(void) {
+    /* 读取复位原因寄存器，判断为什么会复位 */
+    volatile uint32_t *resetreas = (volatile uint32_t *)0x40000400UL;
+    uint32_t reason = *resetreas;
+    
+    LOG_INF("=== RESET REASON: 0x%08X ===", reason);
+    
+    if (reason & 0x00000001) LOG_INF("  -> RESETPIN (P0.18)");
+    if (reason & 0x00000002) LOG_INF("  -> DOG (Watchdog)");
+    if (reason & 0x00000004) LOG_INF("  -> SREQ (Software)");
+    if (reason & 0x00000008) LOG_INF("  -> LOCKUP (CPU Lockup)");
+    if (reason & 0x00010000) LOG_INF("  -> OFF (GPIO Wakeup)");
+    if (reason & 0x00020000) LOG_INF("  -> LPCOMP");
+    if (reason & 0x00040000) LOG_INF("  -> DIF (Debug Interface)");
+    if (reason & 0x00080000) LOG_INF("  -> NFC");
+    if (reason & 0x00100000) LOG_INF("  -> VBUS");
+    
+    if (reason == 0) LOG_INF("  -> POR (Power-On Reset, 正常)");
+    
+    /* 清除标志，方便下次判断 */
+    *resetreas = 0xFFFFFFFFUL;
+    
+    /* 原来的 GPREGRET 清零 */
     NRF_POWER_GPREGRET_REG = 0x00UL;
 
+    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
+    // ... 其余不变
+
+
+
+
+    
     status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
     if (!device_is_ready(status_led_dev)) {
         LOG_WRN("Status LED (P0.29) not ready");
@@ -273,11 +371,10 @@ static int ble_toggle_init(void) {
     }
     memset(status_pixel, 0, sizeof(status_pixel));
 
-        k_work_init(&cw_work, cw_work_handler);
+    k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    LOG_INF("Status LED + Encoder initialized");
-    LOG_INF("GPREGRET cleared");
+    LOG_INF("Status LED + Encoder (count-divider + reverse-protect) initialized");
     LOG_INF("Backlight managed by ZMK RGB underglow");
 
     k_work_schedule(&status_check_work, K_SECONDS(3));
