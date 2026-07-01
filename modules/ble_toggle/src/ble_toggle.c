@@ -32,9 +32,6 @@ LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
 
 
 
-
-LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
-
 /* ===================================================
  * 状态灯硬件：1颗 WS2812, P0.29, SPI2
  *
