@@ -3,7 +3,9 @@
  * MCU: nRF52840
  * 6 Keys + 1 Rotary Encoder (2 virtual keys) = 8 positions
  * 6x WS2812 backlight (P0.17, SPI3) → ZMK RGB underglow
- * 1x WS2812 status LED (P0.29, SPI2) → custom C module
+ * 1x WS2812 status LED (P0.29, SPI1) → custom C module
+ *
+ * 注意：SPIM2 有 Nordic Anomaly 195 硬件 bug，改用 SPIM1。
  */
 
 #include <behaviors.dtsi>
@@ -38,7 +40,6 @@
     kscan0: kscan_0 {
         compatible = "zmk,kscan-gpio-direct";
         wakeup-source;
-
         input-gpios
             = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 1 = P0.24 */
             , <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 2 = P0.22 */
@@ -89,13 +90,12 @@
 };
 
 /* ============================================================
- * SPI3: 6颗背光 WS2812, P0.17, GRB 顺序
+ * SPI3: 6 颗背光 WS2812, P0.17, GRB 顺序
  * → 由 ZMK RGB underglow 接管
  * ============================================================ */
 &spi3 {
     compatible = "nordic,nrf-spim";
     status = "okay";
-
     pinctrl-0 = <&spi3_default>;
     pinctrl-1 = <&spi3_sleep>;
     pinctrl-names = "default", "sleep";
@@ -115,15 +115,17 @@
 };
 
 /* ============================================================
- * SPI2: 1颗状态灯 WS2812, P0.29, GRB 顺序
+ * SPI1: 1 颗状态灯 WS2812, P0.29, GRB 顺序
  * → 由自定义 C 模块控制
+ * 
+ * 从 SPI2 改为 SPI1，规避 Nordic Anomaly 195 硬件 bug。
+ * 引脚 P0.29 保持不变，硬件无需改动。
  * ============================================================ */
-&spi2 {
+&spi1 {
     compatible = "nordic,nrf-spim";
     status = "okay";
-
-    pinctrl-0 = <&spi2_default>;
-    pinctrl-1 = <&spi2_sleep>;
+    pinctrl-0 = <&spi1_default>;
+    pinctrl-1 = <&spi1_sleep>;
     pinctrl-names = "default", "sleep";
 
     status_led: ws2812@0 {
@@ -140,8 +142,12 @@
     };
 };
 
+/* 明确禁用可能冲突的外设 */
+&spi2 { status = "disabled"; };
+&i2c1 { status = "disabled"; };   /* I2C1 与 SPI1 共享硬件实例 */
+
 /* ============================================================
- * pinctrl
+ * pinctrl 配置
  * ============================================================ */
 &pinctrl {
     spi3_default: spi3_default {
@@ -156,12 +162,12 @@
         };
     };
 
-    spi2_default: spi2_default {
+    spi1_default: spi1_default {
         group1 {
             psels = <NRF_PSEL(SPIM_MOSI, 0, 29)>;
         };
     };
-    spi2_sleep: spi2_sleep {
+    spi1_sleep: spi1_sleep {
         group1 {
             psels = <NRF_PSEL(SPIM_MOSI, 0, 29)>;
             low-power-enable;
