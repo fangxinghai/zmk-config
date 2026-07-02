@@ -18,19 +18,7 @@
 #include <zmk/activity.h>
 #include <zmk/sensors.h>
 
-#include <zephyr/kernel.h>
-#include <zephyr/bluetooth/bluetooth.h>
-// ... 你的其他 include ...
-#include <zmk/sensors.h>
-
-/* ★ 这一行必须要有 ★ */
-#define NRF_POWER_GPREGRET_REG  (*(volatile uint32_t *)0x40000051UL)
-
 LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
-
-// ... 其余代码 ...
-
-
 
 /* ===================================================
  * 状态灯硬件：1颗 WS2812, P0.29, SPI2
@@ -345,58 +333,18 @@ ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
  * =================================================== */
 
 static int ble_toggle_init(void) {
-    /* 读取复位原因寄存器 */
-    volatile uint32_t *resetreas = (volatile uint32_t *)0x40000400UL;
-    uint32_t reason = *resetreas;
-    *resetreas = 0xFFFFFFFFUL;   // 清除标志
-
-    /* 清除 GPREGRET */
-    NRF_POWER_GPREGRET_REG = 0x00UL;
-
-    /* 初始化状态灯 */
-    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(led_strip));
+    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
     if (!device_is_ready(status_led_dev)) {
+        LOG_WRN("Status LED (P0.29) not ready");
         status_led_dev = NULL;
     }
     memset(status_pixel, 0, sizeof(status_pixel));
 
-    /* ★ 用状态灯颜色显示复位原因，持续 3 秒 ★ */
-    if (status_led_dev != NULL) {
-        struct led_rgb pixel = {0};
-
-        if (reason == 0) {
-            /* 🟢 绿色 = POR 上电复位（正常） */
-            pixel.r = 0;  pixel.g = 50; pixel.b = 0;
-        } else if (reason & 0x01) {
-            /* 🔴 红色 = RESETPIN (P0.18 触发) */
-            pixel.r = 50; pixel.g = 0;  pixel.b = 0;
-        } else if (reason & 0x02) {
-            /* 🟡 黄色 = 看门狗 */
-            pixel.r = 50; pixel.g = 50; pixel.b = 0;
-        } else if (reason & 0x04) {
-            /* 🔵 蓝色 = 软件复位 */
-            pixel.r = 0;  pixel.g = 0;  pixel.b = 50;
-        } else if (reason & 0x08) {
-            /* 🟠 橙色 = CPU Lockup */
-            pixel.r = 50; pixel.g = 20; pixel.b = 0;
-        } else if (reason & 0x00100000) {
-            /* 🟣 紫色 = VBUS 唤醒 */
-            pixel.r = 50; pixel.g = 0;  pixel.b = 50;
-        } else if (reason & 0x00010000) {
-            /* 🩵 青色 = GPIO 唤醒 (OFF mode) */
-            pixel.r = 0;  pixel.g = 50; pixel.b = 50;
-        } else {
-            /* ⚪ 白色 = 其他原因 */
-            pixel.r = 50; pixel.g = 50; pixel.b = 50;
-        }
-
-        status_pixel[0] = pixel;
-        led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
-        k_msleep(3000);   // 显示 3 秒
-    }
-
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
+
+    LOG_INF("Status LED + Encoder (count-divider + reverse-protect) initialized");
+    LOG_INF("Backlight managed by ZMK RGB underglow");
 
     k_work_schedule(&status_check_work, K_SECONDS(3));
     return 0;
