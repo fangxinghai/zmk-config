@@ -64,12 +64,26 @@ static const struct led_rgb bt_profile_colors[BT_PROFILE_COUNT] = {
  * 状态灯控制
  * =================================================== */
 
+/* ===================================================
+ * 状态灯控制（带诊断日志版）
+ * =================================================== */
+
 static void status_led_set(uint8_t r, uint8_t g, uint8_t b) {
-    if (status_led_dev == NULL) return;
+    if (status_led_dev == NULL) {
+        LOG_ERR(">>> status_led_set skipped: dev is NULL");   // 设备没拿到
+        return;
+    }
     status_pixel[0].r = r;
     status_pixel[0].g = g;
     status_pixel[0].b = b;
-    led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
+
+    int err = led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
+    if (err) {
+        LOG_ERR(">>> led_strip_update_rgb FAILED: %d (r=%d g=%d b=%d)",
+                err, r, g, b);                                 // 传输失败,看错误码
+    } else {
+        LOG_INF(">>> LED set OK: r=%d g=%d b=%d", r, g, b);    // 写成功了
+    }
 }
 
 static void status_led_off(void) {
@@ -335,19 +349,23 @@ ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
 static int ble_toggle_init(void) {
     status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
     if (!device_is_ready(status_led_dev)) {
-        LOG_WRN("Status LED (P0.29) not ready");
+        LOG_ERR(">>> Status LED device NOT ready at init!");   // 驱动初始化就失败
         status_led_dev = NULL;
+    } else {
+        LOG_INF(">>> Status LED device READY");                // 驱动OK
     }
     memset(status_pixel, 0, sizeof(status_pixel));
 
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    LOG_INF("Status LED + Encoder (count-divider + reverse-protect) initialized");
-    LOG_INF("Backlight managed by ZMK RGB underglow");
+    /* 开机自检：强制点白灯，验证整条通路 */
+    status_led_set(50, 50, 50);
+    LOG_INF(">>> ble_toggle init done, self-test WHITE");
 
     k_work_schedule(&status_check_work, K_SECONDS(3));
     return 0;
 }
+
 
 SYS_INIT(ble_toggle_init, APPLICATION, 99);
