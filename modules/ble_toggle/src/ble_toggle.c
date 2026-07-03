@@ -353,21 +353,29 @@ static int ble_toggle_init(void) {
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    /* ⚠️ 调试用：不管设备ready与否，都强行点红灯 */
-    if (status_led_dev != NULL && device_is_ready(status_led_dev)) {
-        /* 设备就绪 → 点绿灯 */
-        status_pixel[0].r = 0;
-        status_pixel[0].g = 50;
-        status_pixel[0].b = 0;
-        led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
+    /* 直接尝试点亮状态灯为蓝色，不做任何 ready 检查之外的判断 */
+    if (status_led_dev == NULL) {
+        /* 设备指针本身是 NULL —— 设备树没编译出这个设备 */
+        return 0;
     }
-    /* 如果绿灯亮 = 设备ready且SPI传输成功
-       如果不亮 = 要么设备没ready，要么SPI传输失败 */
 
-    /* 暂时不启动 check_status，排除状态逻辑干扰 */
+    if (!device_is_ready(status_led_dev)) {
+        /* 设备存在但没 ready —— SPI1 驱动初始化失败 */
+        return 0;
+    }
+
+    /* 设备 ready，强制点蓝灯，绕过所有状态逻辑 */
+    status_pixel[0].r = 0;
+    status_pixel[0].g = 0;
+    status_pixel[0].b = 60;
+    int err = led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
+    (void)err;
+
+    /* 先不启动 check_status */
     /* k_work_schedule(&status_check_work, K_SECONDS(3)); */
     return 0;
 }
+
 
 
 
