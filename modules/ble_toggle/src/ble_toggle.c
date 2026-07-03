@@ -348,24 +348,27 @@ ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
 
 static int ble_toggle_init(void) {
     status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
-    if (!device_is_ready(status_led_dev)) {
-        LOG_ERR(">>> Status LED device NOT ready at init!");   // 驱动初始化就失败
-        status_led_dev = NULL;
-    } else {
-        LOG_INF(">>> Status LED device READY");                // 驱动OK
-    }
-    memset(status_pixel, 0, sizeof(status_pixel));
 
+    memset(status_pixel, 0, sizeof(status_pixel));
     k_work_init(&cw_work, cw_work_handler);
     k_work_init(&ccw_work, ccw_work_handler);
 
-    /* 开机自检：强制点白灯，验证整条通路 */
-    status_led_set(50, 50, 50);
-    LOG_INF(">>> ble_toggle init done, self-test WHITE");
+    /* ⚠️ 调试用：不管设备ready与否，都强行点红灯 */
+    if (status_led_dev != NULL && device_is_ready(status_led_dev)) {
+        /* 设备就绪 → 点绿灯 */
+        status_pixel[0].r = 0;
+        status_pixel[0].g = 50;
+        status_pixel[0].b = 0;
+        led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
+    }
+    /* 如果绿灯亮 = 设备ready且SPI传输成功
+       如果不亮 = 要么设备没ready，要么SPI传输失败 */
 
-    k_work_schedule(&status_check_work, K_SECONDS(3));
+    /* 暂时不启动 check_status，排除状态逻辑干扰 */
+    /* k_work_schedule(&status_check_work, K_SECONDS(3)); */
     return 0;
 }
+
 
 
 SYS_INIT(ble_toggle_init, APPLICATION, 99);
