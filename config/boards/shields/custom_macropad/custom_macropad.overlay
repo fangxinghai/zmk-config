@@ -1,9 +1,22 @@
 /*
  * Custom Macropad Shield Overlay
  * MCU: nRF52840
- * 6 Keys + 1 Rotary Encoder (2 virtual keys) = 8 positions
- * 6x WS2812 backlight (P0.17, SPI3) → ZMK RGB underglow
- * P0.29 (AIN5) → 滑动变阻器 (ADC 模拟输入)   ← 临时占用，替换原状态灯
+ *
+ * 位置映射:
+ *   0..5  : 6 个实体按键
+ *   6     : 编码器 CW  (虚拟按键)
+ *   7     : 编码器 CCW (虚拟按键)
+ *   8     : 滑条音量 + (虚拟按键，由 ADC 触发)
+ *   9     : 滑条音量 - (虚拟按键，由 ADC 触发)
+ *
+ * 外设:
+ *   SPI3 + P0.17  → 6 颗 WS2812 背光 (ZMK RGB underglow 接管)
+ *   ADC AIN5=P0.29 → 滑动变阻器 (自定义模块接管，映射到系统音量)
+ *   AIN2 = P0.04  → 电池分压 (保持原样)
+ *
+ * 说明:
+ *   P0.29 从原状态灯 (SPI1 WS2812) 改为 ADC 输入。
+ *   SPI1 / SPI2 相关内容已移除。
  */
 
 #include <behaviors.dtsi>
@@ -16,43 +29,46 @@
 
 / {
     chosen {
-        zmk,kscan          = &kscan0;
+        zmk,kscan           = &kscan0;
         zmk,physical-layout = &physical_layout0;
-        zmk,battery        = &vbatt;
-        zmk,underglow      = &backlight_strip;
+        zmk,battery         = &vbatt;
+        zmk,underglow       = &backlight_strip;
     };
 
+    /* 电池电压分压 (保持原样，AIN2 = P0.04) */
     vbatt: vbatt {
-        compatible = "zmk,battery-voltage-divider";
-        io-channels = <&adc 2>;              /* AIN2 = P0.04，电池分压 */
+        compatible  = "zmk,battery-voltage-divider";
+        io-channels = <&adc 2>;
         output-ohms = <5100000>;
         full-ohms   = <(5100000 + 5100000)>;
     };
 
     ext_power {
-        compatible     = "zmk,ext-power-generic";
-        control-gpios  = <&gpio0 13 GPIO_ACTIVE_HIGH>;
-        init-delay-ms  = <50>;
+        compatible    = "zmk,ext-power-generic";
+        control-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+        init-delay-ms = <50>;
     };
 
+    /* 6 个直连按键 */
     kscan0: kscan_0 {
         compatible = "zmk,kscan-gpio-direct";
         wakeup-source;
         input-gpios
-            = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
-            , <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
-            , <&gpio0 20 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
-            , <&gpio1 4  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
-            , <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
-            , <&gpio1 0  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+            = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 1 = P0.24 */
+            , <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 2 = P0.22 */
+            , <&gpio0 20 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 3 = P0.20 */
+            , <&gpio1 4  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 4 = P1.04 */
+            , <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 5 = P0.11 */
+            , <&gpio1 0  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 6 = P1.00 */
             ;
     };
 
+    /* 矩阵变换: 1 行 × 10 列 (6 实体 + 2 编码器 + 2 滑条虚拟键) */
     direct_transform: direct_matrix_transform {
         compatible = "zmk,matrix-transform";
         rows    = <1>;
-        columns = <8>;
-        map     = <0 1 2 3 4 5 6 7>;
+        columns = <10>;
+        map     = <0 1 2 3 4 5 6 7 8 9>;
     };
 
     physical_layout0: physical_layout_0 {
@@ -61,17 +77,20 @@
         transform    = <&direct_transform>;
         kscan        = <&kscan0>;
         keys =
-            <&key_physical_attrs 100 100   0   0   0 0 0>,
-            <&key_physical_attrs 100 100 100   0   0 0 0>,
-            <&key_physical_attrs 100 100 200   0   0 0 0>,
-            <&key_physical_attrs 100 100   0 100   0 0 0>,
-            <&key_physical_attrs 100 100 100 100   0 0 0>,
-            <&key_physical_attrs 100 100 200 100   0 0 0>,
-            <&key_physical_attrs 100 100 350   0   0 0 0>,
-            <&key_physical_attrs 100 100 350 100   0 0 0>
+            <&key_physical_attrs 100 100   0   0   0 0 0>,   /* pos 0: Key 1 */
+            <&key_physical_attrs 100 100 100   0   0 0 0>,   /* pos 1: Key 2 */
+            <&key_physical_attrs 100 100 200   0   0 0 0>,   /* pos 2: Key 3 */
+            <&key_physical_attrs 100 100   0 100   0 0 0>,   /* pos 3: Key 4 */
+            <&key_physical_attrs 100 100 100 100   0 0 0>,   /* pos 4: Key 5 */
+            <&key_physical_attrs 100 100 200 100   0 0 0>,   /* pos 5: Key 6 */
+            <&key_physical_attrs 100 100 350   0   0 0 0>,   /* pos 6: Encoder CW  */
+            <&key_physical_attrs 100 100 350 100   0 0 0>,   /* pos 7: Encoder CCW */
+            <&key_physical_attrs 100 100 450   0   0 0 0>,   /* pos 8: Slider VOL+ */
+            <&key_physical_attrs 100 100 450 100   0 0 0>    /* pos 9: Slider VOL- */
             ;
     };
 
+    /* EC11 编码器 */
     encoder: encoder_0 {
         compatible = "alps,ec11";
         a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
@@ -86,38 +105,40 @@
         triggers-per-rotation = <24>;
     };
 
-    /* ★ 供自定义模块读取 ADC 用 */
+    /* ★ 供自定义 C 模块读取 ADC 用 */
     zephyr,user {
-        io-channels = <&adc 5>;   /* AIN5 = P0.29 → 滑动变阻器 */
+        io-channels = <&adc 5>;   /* 数组索引 0 → 通道 5 (AIN5 = P0.29) */
     };
 };
 
 /* ============================================================
- * SPI3: 6 颗背光 WS2812, P0.17
+ * SPI3: 6 颗背光 WS2812, P0.17 (ZMK RGB underglow 使用)
  * ============================================================ */
 &spi3 {
-    compatible   = "nordic,nrf-spim";
-    status       = "okay";
-    pinctrl-0    = <&spi3_default>;
-    pinctrl-1    = <&spi3_sleep>;
+    compatible    = "nordic,nrf-spim";
+    status        = "okay";
+    pinctrl-0     = <&spi3_default>;
+    pinctrl-1     = <&spi3_sleep>;
     pinctrl-names = "default", "sleep";
 
     backlight_strip: ws2812@0 {
-        compatible       = "worldsemi,ws2812-spi";
-        label            = "WS2812_BACKLIGHT";
-        reg              = <0>;
+        compatible        = "worldsemi,ws2812-spi";
+        label             = "WS2812_BACKLIGHT";
+        reg               = <0>;
         spi-max-frequency = <4000000>;
-        chain-length     = <6>;
-        spi-one-frame    = <0x70>;
-        spi-zero-frame   = <0x40>;
-        color-mapping    = <LED_COLOR_ID_GREEN
-                            LED_COLOR_ID_RED
-                            LED_COLOR_ID_BLUE>;
+        chain-length      = <6>;
+        spi-one-frame     = <0x70>;
+        spi-zero-frame    = <0x40>;
+        color-mapping     = <LED_COLOR_ID_GREEN
+                             LED_COLOR_ID_RED
+                             LED_COLOR_ID_BLUE>;
     };
 };
 
 /* ============================================================
- * ADC: 启用 SAADC，配置 AIN5 (P0.29) 作为滑动变阻器输入
+ * ADC (SAADC): 开启并配置两个通道
+ *   通道 2 (AIN2 = P0.04) → 电池分压
+ *   通道 5 (AIN5 = P0.29) → 滑动变阻器
  * ============================================================ */
 &adc {
     status = "okay";
@@ -125,7 +146,17 @@
     #address-cells = <1>;
     #size-cells    = <0>;
 
-    /* 通道 5 → AIN5 (P0.29) */
+    /* 通道 2 → 电池分压 (原有) */
+    channel@2 {
+        reg = <2>;
+        zephyr,gain             = "ADC_GAIN_1_6";
+        zephyr,reference        = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;
+        zephyr,input-positive   = <NRF_SAADC_AIN2>;
+        zephyr,resolution       = <12>;
+    };
+
+    /* 通道 5 → 滑动变阻器 (新增) */
     channel@5 {
         reg = <5>;
         zephyr,gain             = "ADC_GAIN_1_6";
@@ -137,7 +168,7 @@
 };
 
 /* ============================================================
- * pinctrl 配置（只保留 SPI3 背光）
+ * pinctrl 配置 (只保留 SPI3 背光)
  * ============================================================ */
 &pinctrl {
     spi3_default: spi3_default {
