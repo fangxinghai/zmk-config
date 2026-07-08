@@ -1,6 +1,5 @@
 config CUSTOM_BLE_TOGGLE
-    bool "Custom status LED + encoder debounce"
+    bool "Custom encoder debounce + volume slider"
     default y
     depends on BT
-    depends on LED_STRIP
-    depends on SPI
+    depends on ADC
