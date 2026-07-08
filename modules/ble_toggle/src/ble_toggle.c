@@ -1,16 +1,13 @@
 #include <zephyr/kernel.h>
-#include <zephyr/bluetooth/bluetooth.h>
-#include <zephyr/bluetooth/conn.h>
-#include <zephyr/drivers/led_strip.h>
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/sensor.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
-#include <zmk/ble.h>
-#include <zmk/usb.h>
-#include <zmk/endpoints_types.h>
+#include <stdlib.h>
+
+#include <zmk/hid.h>
 #include <zmk/endpoints.h>
-#include <zmk/battery.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/events/sensor_event.h>
 #include <zmk/events/activity_state_changed.h>
@@ -18,159 +15,51 @@
 #include <zmk/activity.h>
 #include <zmk/sensors.h>
 
+#include <dt-bindings/zmk/keys.h>
+
 LOG_MODULE_REGISTER(ble_toggle, CONFIG_LOG_DEFAULT_LEVEL);
 
-/* ===================================================
- * 状态灯硬件：1颗 WS2812, P0.29, SPI1
- * =================================================== */
-
-#define STATUS_LEDS 1
-
-static const struct device *status_led_dev;
-static struct led_rgb status_pixel[STATUS_LEDS];
-
-static bool blink_phase = true;
 static bool is_sleeping = false;
 
-/* ===================================================
- * 蓝牙配置颜色方案 (5个配置用不同蓝色区分)
- * =================================================== */
-
-#define BT_PROFILE_COUNT 5
-
-static const struct led_rgb bt_profile_colors[BT_PROFILE_COUNT] = {
-    { .r = 0,  .g = 0,  .b = 50 },   /* 配置 0: 纯蓝 */
-    { .r = 0,  .g = 15, .b = 50 },   /* 配置 1: 靛蓝 */
-    { .r = 0,  .g = 30, .b = 50 },   /* 配置 2: 青蓝 */
-    { .r = 15, .g = 0,  .b = 50 },   /* 配置 3: 紫蓝 */
-    { .r = 30, .g = 0,  .b = 50 },   /* 配置 4: 粉蓝 */
-};
-
-/* ===================================================
- * 状态灯控制
- * =================================================== */
-
-static void status_led_set(uint8_t r, uint8_t g, uint8_t b) {
-    if (status_led_dev == NULL) return;
-    status_pixel[0].r = r;
-    status_pixel[0].g = g;
-    status_pixel[0].b = b;
-    led_strip_update_rgb(status_led_dev, status_pixel, STATUS_LEDS);
-}
-
-static void status_led_off(void) {
-    status_led_set(0, 0, 0);
-}
-
-static void status_led_set_rgb(const struct led_rgb *c) {
-    status_led_set(c->r, c->g, c->b);
-}
-
-/* ===================================================
- * 主状态检测循环
- *
- * 优先级 (高→低):
- *   1. 休眠            → 灭
- *   2. 低电量 ≤10%     → 红色闪烁
- *   3. USB             → 绿色常亮
- *   4. 蓝牙已连接      → 对应配置色常亮
- *   5. 蓝牙未连接/配对  → 对应配置色闪烁
- * =================================================== */
-
-static void check_status(struct k_work *work);
-K_WORK_DELAYABLE_DEFINE(status_check_work, check_status);
-
-static void check_status(struct k_work *work) {
-    if (is_sleeping) {
-        status_led_off();
-        return;
-    }
-
-    struct zmk_endpoint_instance ep = zmk_endpoint_get_selected();
-    uint8_t batt = zmk_battery_state_of_charge();
-
-    /* 低电量：电量有效(>0)且 ≤10% */
-    bool low_batt = (batt > 0 && batt <= 10);
-    bool usb = (ep.transport == ZMK_TRANSPORT_USB);
-
-    int bt_profile = zmk_ble_active_profile_index();
-    if (bt_profile < 0 || bt_profile >= BT_PROFILE_COUNT) {
-        bt_profile = 0;
-    }
-    const struct led_rgb *bt_color = &bt_profile_colors[bt_profile];
-
-    blink_phase = !blink_phase;
-
-    /* ---- 优先级1(最高)：低电量 ≤10% 红色闪烁 ---- */
-    if (low_batt) {
-        if (blink_phase) {
-            status_led_set(50, 0, 0);   /* 红 */
-        } else {
-            status_led_off();
-        }
-        k_work_schedule(&status_check_work, K_MSEC(500));
-
-    /* ---- 优先级2：USB 绿色常亮 ---- */
-    } else if (usb) {
-        status_led_set(0, 50, 0);
-        k_work_schedule(&status_check_work, K_SECONDS(3));
-
-    /* ---- 优先级3：蓝牙已连接，对应配置色常亮 ---- */
-    } else if (zmk_ble_active_profile_is_connected()) {
-        status_led_set_rgb(bt_color);
-        k_work_schedule(&status_check_work, K_SECONDS(3));
-
-    /* ---- 优先级4：蓝牙未连接/配对中，对应配置色闪烁 ---- */
-    } else {
-        if (blink_phase) {
-            status_led_set_rgb(bt_color);
-        } else {
-            status_led_off();
-        }
-        k_work_schedule(&status_check_work, K_MSEC(500));
-    }
-}
-
-/* ===================================================
- * 休眠/唤醒
- * =================================================== */
+/* =========================================================
+ *  活动/休眠事件（用来暂停 ADC 采样省电）
+ * ========================================================= */
+static void volume_work_handler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(volume_work, volume_work_handler);
 
 static int activity_event_listener(const zmk_event_t *eh) {
     struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
     if (ev == NULL) return ZMK_EV_EVENT_BUBBLE;
 
     switch (ev->state) {
-        case ZMK_ACTIVITY_ACTIVE:
-            is_sleeping = false;
-            k_work_schedule(&status_check_work, K_MSEC(100));
-            break;
-        case ZMK_ACTIVITY_IDLE:
-        case ZMK_ACTIVITY_SLEEP:
-            is_sleeping = true;
-            k_work_cancel_delayable(&status_check_work);
-            status_led_off();
-            break;
+    case ZMK_ACTIVITY_ACTIVE:
+        is_sleeping = false;
+        k_work_schedule(&volume_work, K_MSEC(100));
+        break;
+    case ZMK_ACTIVITY_IDLE:
+    case ZMK_ACTIVITY_SLEEP:
+        is_sleeping = true;
+        k_work_cancel_delayable(&volume_work);
+        break;
     }
     return ZMK_EV_EVENT_BUBBLE;
 }
-
 ZMK_LISTENER(activity_led, activity_event_listener);
 ZMK_SUBSCRIPTION(activity_led, zmk_activity_state_changed);
 
-/* ===================================================
- * 旋钮转虚拟按键（计数分频 + 反转保护）
- * =================================================== */
+/* =========================================================
+ *  编码器：计数分频 + 反转保护（保持原样）
+ * ========================================================= */
+#define ENCODER_CW_POSITION       6
+#define ENCODER_CCW_POSITION      7
+#define VIRTUAL_KEY_PRESS_MS      5
+#define ENCODER_EVENTS_PER_CLICK  2
+#define REVERSE_CONFIRM_COUNT     2
 
-#define ENCODER_CW_POSITION         6
-#define ENCODER_CCW_POSITION        7
-#define VIRTUAL_KEY_PRESS_MS        5
-#define ENCODER_EVENTS_PER_CLICK    2
-#define REVERSE_CONFIRM_COUNT       2
-
-static int  enc_confirmed_dir = 0;
-static int  enc_pending_dir = 0;
-static int  enc_pending_count = 0;
-static int  enc_fire_counter = 0;
+static int enc_confirmed_dir = 0;
+static int enc_pending_dir   = 0;
+static int enc_pending_count = 0;
+static int enc_fire_counter  = 0;
 
 static void encoder_virtual_press(uint32_t position) {
     raise_zmk_position_state_changed((struct zmk_position_state_changed){
@@ -186,10 +75,8 @@ static void encoder_virtual_press(uint32_t position) {
 
 static struct k_work cw_work;
 static struct k_work ccw_work;
-
 static void cw_work_handler(struct k_work *work)  { encoder_virtual_press(ENCODER_CW_POSITION); }
 static void ccw_work_handler(struct k_work *work) { encoder_virtual_press(ENCODER_CCW_POSITION); }
-
 static void encoder_fire(int direction) {
     if (direction > 0) k_work_submit(&cw_work);
     else               k_work_submit(&ccw_work);
@@ -206,13 +93,12 @@ static int sensor_event_listener(const zmk_event_t *eh) {
         if (channel_data[i].channel == SENSOR_CHAN_ROTATION) {
             int value = sensor_value_to_micro(&channel_data[i].value);
             if (value == 0) return ZMK_EV_EVENT_HANDLED;
-
             int direction = (value > 0) ? 1 : -1;
 
             if (enc_confirmed_dir == 0) {
                 enc_confirmed_dir = direction;
-                enc_fire_counter = 1;
-                enc_pending_dir = 0;
+                enc_fire_counter  = 1;
+                enc_pending_dir   = 0;
                 enc_pending_count = 0;
                 if (enc_fire_counter >= ENCODER_EVENTS_PER_CLICK) {
                     enc_fire_counter = 0;
@@ -220,12 +106,8 @@ static int sensor_event_listener(const zmk_event_t *eh) {
                 }
                 return ZMK_EV_EVENT_HANDLED;
             }
-
             if (direction == enc_confirmed_dir) {
-                if (enc_pending_count > 0) {
-                    enc_pending_dir = 0;
-                    enc_pending_count = 0;
-                }
+                if (enc_pending_count > 0) { enc_pending_dir = 0; enc_pending_count = 0; }
                 enc_fire_counter++;
                 if (enc_fire_counter >= ENCODER_EVENTS_PER_CLICK) {
                     enc_fire_counter = 0;
@@ -233,18 +115,13 @@ static int sensor_event_listener(const zmk_event_t *eh) {
                 }
                 return ZMK_EV_EVENT_HANDLED;
             }
-
-            if (enc_pending_dir == direction) {
-                enc_pending_count++;
-            } else {
-                enc_pending_dir = direction;
-                enc_pending_count = 1;
-            }
+            if (enc_pending_dir == direction) enc_pending_count++;
+            else { enc_pending_dir = direction; enc_pending_count = 1; }
 
             if (enc_pending_count >= REVERSE_CONFIRM_COUNT) {
                 enc_confirmed_dir = enc_pending_dir;
-                enc_fire_counter = enc_pending_count;
-                enc_pending_dir = 0;
+                enc_fire_counter  = enc_pending_count;
+                enc_pending_dir   = 0;
                 enc_pending_count = 0;
                 if (enc_fire_counter >= ENCODER_EVENTS_PER_CLICK) {
                     enc_fire_counter = 0;
@@ -256,31 +133,151 @@ static int sensor_event_listener(const zmk_event_t *eh) {
     }
     return ZMK_EV_EVENT_BUBBLE;
 }
-
 ZMK_LISTENER(encoder_to_keys, sensor_event_listener);
 ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
 
-/* ===================================================
- * 初始化
- * =================================================== */
+/* =========================================================
+ *  ★ 滑动变阻器 → 系统音量  (P0.29 = AIN5)
+ *
+ *  硬件建议:
+ *    电位器 10k~100k, 上端 3.3V, 下端 GND, 中间抽头到 P0.29
+ *    中间抽头 → GND 加 0.1uF 电容 (硬件低通)
+ *
+ *  去抖策略:
+ *    - 每 SAMPLE_INTERVAL_MS 采样一次
+ *    - 滑动平均 FILTER_WIN 次
+ *    - 差值 > VOL_DEADBAND 才动作
+ *    - 每次最多发 VOL_MAX_STEP_PER_TICK 个音量键
+ * ========================================================= */
+#define SAMPLE_INTERVAL_MS      50
+#define FILTER_WIN              8
+#define VOL_STEPS               50    /* 电位器范围量化到 0..50 档 */
+#define VOL_DEADBAND            1     /* 死区: 变化 <=1 档不动 */
+#define VOL_KEY_GAP_MS          15
+#define VOL_MAX_STEP_PER_TICK   3
 
-static int ble_toggle_init(void) {
-    status_led_dev = DEVICE_DT_GET(DT_NODELABEL(status_led));
-    if (!device_is_ready(status_led_dev)) {
-        status_led_dev = NULL;
+#define ADC_NODE  DT_PATH(zephyr_user)
+static const struct adc_dt_spec adc_chan =
+    ADC_DT_SPEC_GET_BY_IDX(ADC_NODE, 0);
+
+static int16_t adc_raw_buf;
+static struct adc_sequence adc_seq = {
+    .buffer      = &adc_raw_buf,
+    .buffer_size = sizeof(adc_raw_buf),
+};
+
+static int   filt_ring[FILTER_WIN];
+static int   filt_idx  = 0;
+static bool  filt_full = false;
+static int   last_stable_vol = 0;
+static bool  vol_initialized = false;
+
+static void send_vol_key(bool up) {
+    uint16_t usage = up ? HID_USAGE_CONSUMER_VOLUME_INCREMENT
+                        : HID_USAGE_CONSUMER_VOLUME_DECREMENT;
+    zmk_hid_consumer_press(usage);
+    zmk_endpoints_send_report(HID_USAGE_CONSUMER);
+    k_msleep(5);
+    zmk_hid_consumer_release(usage);
+    zmk_endpoints_send_report(HID_USAGE_CONSUMER);
+}
+
+static int adc_read_once(void) {
+    int err = adc_read(adc_chan.dev, &adc_seq);
+    if (err) {
+        LOG_WRN("ADC read failed: %d", err);
+        return -1;
     }
-    memset(status_pixel, 0, sizeof(status_pixel));
+    int32_t val = adc_raw_buf;
+    if (val < 0) val = 0;
+    return val;
+}
 
-    k_work_init(&cw_work, cw_work_handler);
-    k_work_init(&ccw_work, ccw_work_handler);
+static int raw_to_vol(int raw) {
+    const int RAW_MAX = (1 << 12) - 1;   /* 12-bit → 4095 */
+    if (raw < 0) raw = 0;
+    if (raw > RAW_MAX) raw = RAW_MAX;
+    return (raw * VOL_STEPS + RAW_MAX / 2) / RAW_MAX;
+}
 
-    /* 开机自检：白灯一下 */
-    status_led_set(30, 30, 30);
+static void volume_work_handler(struct k_work *work) {
+    if (is_sleeping) {
+        k_work_schedule(&volume_work, K_SECONDS(1));
+        return;
+    }
 
-    /* 启动状态检测循环 */
-    k_work_schedule(&status_check_work, K_SECONDS(1));
+    int raw = adc_read_once();
+    if (raw >= 0) {
+        /* 1) 滑动平均 */
+        filt_ring[filt_idx] = raw;
+        filt_idx = (filt_idx + 1) % FILTER_WIN;
+        if (filt_idx == 0) filt_full = true;
 
+        int cnt = filt_full ? FILTER_WIN : filt_idx;
+        if (cnt == 0) cnt = FILTER_WIN;
+        int sum = 0;
+        for (int i = 0; i < cnt; i++) sum += filt_ring[i];
+        int avg = sum / cnt;
+
+        int target_vol = raw_to_vol(avg);
+
+        if (!vol_initialized) {
+            /* 首次上电：只记录当前位置，不主动同步音量 */
+            if (filt_full) {
+                last_stable_vol = target_vol;
+                vol_initialized = true;
+                LOG_INF("Volume slider init at step %d (raw=%d)", target_vol, avg);
+            }
+        } else {
+            int diff = target_vol - last_stable_vol;
+            if (abs(diff) > VOL_DEADBAND) {
+                int steps = abs(diff);
+                if (steps > VOL_MAX_STEP_PER_TICK) steps = VOL_MAX_STEP_PER_TICK;
+                bool up = (diff > 0);
+
+                LOG_DBG("Vol %d -> %d, sending %d %s",
+                        last_stable_vol, target_vol, steps, up ? "UP" : "DOWN");
+
+                for (int i = 0; i < steps; i++) {
+                    send_vol_key(up);
+                    k_msleep(VOL_KEY_GAP_MS);
+                }
+                last_stable_vol += up ? steps : -steps;
+            }
+        }
+    }
+
+    k_work_schedule(&volume_work, K_MSEC(SAMPLE_INTERVAL_MS));
+}
+
+static int volume_slider_init(void) {
+    if (!adc_is_ready_dt(&adc_chan)) {
+        LOG_ERR("ADC controller not ready");
+        return -ENODEV;
+    }
+    int err = adc_channel_setup_dt(&adc_chan);
+    if (err) {
+        LOG_ERR("adc_channel_setup_dt failed: %d", err);
+        return err;
+    }
+    err = adc_sequence_init_dt(&adc_chan, &adc_seq);
+    if (err) {
+        LOG_ERR("adc_sequence_init_dt failed: %d", err);
+        return err;
+    }
+    k_work_schedule(&volume_work, K_MSEC(500));
+    LOG_INF("Volume slider initialized on AIN5 (P0.29)");
     return 0;
 }
 
+/* =========================================================
+ *  初始化
+ * ========================================================= */
+static int ble_toggle_init(void) {
+    k_work_init(&cw_work,  cw_work_handler);
+    k_work_init(&ccw_work, ccw_work_handler);
+
+    volume_slider_init();
+    return 0;
+}
 SYS_INIT(ble_toggle_init, APPLICATION, 99);
