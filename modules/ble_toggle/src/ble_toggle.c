@@ -6,8 +6,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include <zmk/hid.h>
-#include <zmk/endpoints.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/events/sensor_event.h>
 #include <zmk/events/activity_state_changed.h>
@@ -48,7 +46,7 @@ ZMK_LISTENER(activity_led, activity_event_listener);
 ZMK_SUBSCRIPTION(activity_led, zmk_activity_state_changed);
 
 /* =========================================================
- *  编码器：计数分频 + 反转保护（保持原样）
+ *  编码器：计数分频 + 反转保护
  * ========================================================= */
 #define ENCODER_CW_POSITION       6
 #define ENCODER_CCW_POSITION      7
@@ -137,24 +135,23 @@ ZMK_LISTENER(encoder_to_keys, sensor_event_listener);
 ZMK_SUBSCRIPTION(encoder_to_keys, zmk_sensor_event);
 
 /* =========================================================
- *  ★ 滑动变阻器 → 系统音量  (P0.29 = AIN5)
+ *  ★ 滑动变阻器 → 音量 (P0.29 = AIN5)
  *
- *  硬件建议:
- *    电位器 10k~100k, 上端 3.3V, 下端 GND, 中间抽头到 P0.29
- *    中间抽头 → GND 加 0.1uF 电容 (硬件低通)
- *
- *  去抖策略:
- *    - 每 SAMPLE_INTERVAL_MS 采样一次
- *    - 滑动平均 FILTER_WIN 次
- *    - 差值 > VOL_DEADBAND 才动作
- *    - 每次最多发 VOL_MAX_STEP_PER_TICK 个音量键
+ *  改用虚拟按键路径：
+ *    音量+ → position VOL_UP_POSITION   (键位 8)
+ *    音量- → position VOL_DN_POSITION   (键位 9)
+ *  → 在 keymap 里把 8/9 绑成 &kp C_VOL_UP / &kp C_VOL_DN
  * ========================================================= */
 #define SAMPLE_INTERVAL_MS      50
 #define FILTER_WIN              8
-#define VOL_STEPS               50    /* 电位器范围量化到 0..50 档 */
-#define VOL_DEADBAND            1     /* 死区: 变化 <=1 档不动 */
+#define VOL_STEPS               50
+#define VOL_DEADBAND            1
 #define VOL_KEY_GAP_MS          15
 #define VOL_MAX_STEP_PER_TICK   3
+
+/* ★ 新增两个虚拟按键位置 (接在编码器 6/7 后面) */
+#define VOL_UP_POSITION         8
+#define VOL_DN_POSITION         9
 
 #define ADC_NODE  DT_PATH(zephyr_user)
 static const struct adc_dt_spec adc_chan =
@@ -172,14 +169,18 @@ static bool  filt_full = false;
 static int   last_stable_vol = 0;
 static bool  vol_initialized = false;
 
+/* ★ 新版：走虚拟按键，不再调 zmk_endpoints_send_report */
 static void send_vol_key(bool up) {
-    uint16_t usage = up ? HID_USAGE_CONSUMER_VOLUME_INCREMENT
-                        : HID_USAGE_CONSUMER_VOLUME_DECREMENT;
-    zmk_hid_consumer_press(usage);
-    zmk_endpoints_send_report(HID_USAGE_CONSUMER);
-    k_msleep(5);
-    zmk_hid_consumer_release(usage);
-    zmk_endpoints_send_report(HID_USAGE_CONSUMER);
+    uint32_t pos = up ? VOL_UP_POSITION : VOL_DN_POSITION;
+    raise_zmk_position_state_changed((struct zmk_position_state_changed){
+        .source = 0, .position = pos, .state = true,
+        .timestamp = k_uptime_get(),
+    });
+    k_msleep(VIRTUAL_KEY_PRESS_MS);
+    raise_zmk_position_state_changed((struct zmk_position_state_changed){
+        .source = 0, .position = pos, .state = false,
+        .timestamp = k_uptime_get(),
+    });
 }
 
 static int adc_read_once(void) {
@@ -194,7 +195,7 @@ static int adc_read_once(void) {
 }
 
 static int raw_to_vol(int raw) {
-    const int RAW_MAX = (1 << 12) - 1;   /* 12-bit → 4095 */
+    const int RAW_MAX = (1 << 12) - 1;
     if (raw < 0) raw = 0;
     if (raw > RAW_MAX) raw = RAW_MAX;
     return (raw * VOL_STEPS + RAW_MAX / 2) / RAW_MAX;
@@ -208,7 +209,6 @@ static void volume_work_handler(struct k_work *work) {
 
     int raw = adc_read_once();
     if (raw >= 0) {
-        /* 1) 滑动平均 */
         filt_ring[filt_idx] = raw;
         filt_idx = (filt_idx + 1) % FILTER_WIN;
         if (filt_idx == 0) filt_full = true;
@@ -222,7 +222,6 @@ static void volume_work_handler(struct k_work *work) {
         int target_vol = raw_to_vol(avg);
 
         if (!vol_initialized) {
-            /* 首次上电：只记录当前位置，不主动同步音量 */
             if (filt_full) {
                 last_stable_vol = target_vol;
                 vol_initialized = true;
