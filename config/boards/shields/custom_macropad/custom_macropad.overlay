@@ -3,9 +3,7 @@
  * MCU: nRF52840
  * 6 Keys + 1 Rotary Encoder (2 virtual keys) = 8 positions
  * 6x WS2812 backlight (P0.17, SPI3) → ZMK RGB underglow
- * 1x WS2812 status LED (P0.29, SPI1) → custom C module
- *
- * 注意：SPIM2 有 Nordic Anomaly 195 硬件 bug，改用 SPIM1。
+ * P0.29 (AIN5) → 滑动变阻器 (ADC 模拟输入)   ← 临时占用，替换原状态灯
  */
 
 #include <behaviors.dtsi>
@@ -18,59 +16,59 @@
 
 / {
     chosen {
-        zmk,kscan = &kscan0;
+        zmk,kscan          = &kscan0;
         zmk,physical-layout = &physical_layout0;
-        zmk,battery = &vbatt;
-        zmk,underglow = &backlight_strip;
+        zmk,battery        = &vbatt;
+        zmk,underglow      = &backlight_strip;
     };
 
     vbatt: vbatt {
         compatible = "zmk,battery-voltage-divider";
-        io-channels = <&adc 2>;
+        io-channels = <&adc 2>;              /* AIN2 = P0.04，电池分压 */
         output-ohms = <5100000>;
-        full-ohms = <(5100000 + 5100000)>;
+        full-ohms   = <(5100000 + 5100000)>;
     };
 
     ext_power {
-        compatible = "zmk,ext-power-generic";
-        control-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
-        init-delay-ms = <50>;
+        compatible     = "zmk,ext-power-generic";
+        control-gpios  = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+        init-delay-ms  = <50>;
     };
 
     kscan0: kscan_0 {
         compatible = "zmk,kscan-gpio-direct";
         wakeup-source;
         input-gpios
-            = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 1 = P0.24 */
-            , <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 2 = P0.22 */
-            , <&gpio0 20 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 3 = P0.20 */
-            , <&gpio1 4  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 4 = P1.04 */
-            , <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 5 = P0.11 */
-            , <&gpio1 0  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>   /* Key 6 = P1.00 */
+            = <&gpio0 24 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+            , <&gpio0 22 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+            , <&gpio0 20 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+            , <&gpio1 4  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+            , <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+            , <&gpio1 0  (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
             ;
     };
 
     direct_transform: direct_matrix_transform {
         compatible = "zmk,matrix-transform";
-        rows = <1>;
+        rows    = <1>;
         columns = <8>;
-        map = <0 1 2 3 4 5 6 7>;
+        map     = <0 1 2 3 4 5 6 7>;
     };
 
     physical_layout0: physical_layout_0 {
-        compatible = "zmk,physical-layout";
+        compatible   = "zmk,physical-layout";
         display-name = "Default Layout";
-        transform = <&direct_transform>;
-        kscan = <&kscan0>;
+        transform    = <&direct_transform>;
+        kscan        = <&kscan0>;
         keys =
-            <&key_physical_attrs 100 100   0   0   0 0 0>,   /* Key 1 */
-            <&key_physical_attrs 100 100 100   0   0 0 0>,   /* Key 2 */
-            <&key_physical_attrs 100 100 200   0   0 0 0>,   /* Key 3 */
-            <&key_physical_attrs 100 100   0 100   0 0 0>,   /* Key 4 */
-            <&key_physical_attrs 100 100 100 100   0 0 0>,   /* Key 5 */
-            <&key_physical_attrs 100 100 200 100   0 0 0>,   /* Key 6 */
-            <&key_physical_attrs 100 100 350   0   0 0 0>,   /* Encoder CW  */
-            <&key_physical_attrs 100 100 350 100   0 0 0>    /* Encoder CCW */
+            <&key_physical_attrs 100 100   0   0   0 0 0>,
+            <&key_physical_attrs 100 100 100   0   0 0 0>,
+            <&key_physical_attrs 100 100 200   0   0 0 0>,
+            <&key_physical_attrs 100 100   0 100   0 0 0>,
+            <&key_physical_attrs 100 100 100 100   0 0 0>,
+            <&key_physical_attrs 100 100 200 100   0 0 0>,
+            <&key_physical_attrs 100 100 350   0   0 0 0>,
+            <&key_physical_attrs 100 100 350 100   0 0 0>
             ;
     };
 
@@ -78,76 +76,68 @@
         compatible = "alps,ec11";
         a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
         b-gpios = <&gpio1 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-        steps = <24>;
+        steps  = <24>;
         status = "okay";
     };
 
     sensors: sensors {
         compatible = "zmk,keymap-sensors";
-        sensors = <&encoder>;
+        sensors    = <&encoder>;
         triggers-per-rotation = <24>;
+    };
+
+    /* ★ 供自定义模块读取 ADC 用 */
+    zephyr,user {
+        io-channels = <&adc 5>;   /* AIN5 = P0.29 → 滑动变阻器 */
     };
 };
 
 /* ============================================================
- * SPI3: 6 颗背光 WS2812, P0.17, GRB 顺序
- * → 由 ZMK RGB underglow 接管
+ * SPI3: 6 颗背光 WS2812, P0.17
  * ============================================================ */
 &spi3 {
-    compatible = "nordic,nrf-spim";
-    status = "okay";
-    pinctrl-0 = <&spi3_default>;
-    pinctrl-1 = <&spi3_sleep>;
+    compatible   = "nordic,nrf-spim";
+    status       = "okay";
+    pinctrl-0    = <&spi3_default>;
+    pinctrl-1    = <&spi3_sleep>;
     pinctrl-names = "default", "sleep";
 
     backlight_strip: ws2812@0 {
-        compatible = "worldsemi,ws2812-spi";
-        label = "WS2812_BACKLIGHT";
-        reg = <0>;
+        compatible       = "worldsemi,ws2812-spi";
+        label            = "WS2812_BACKLIGHT";
+        reg              = <0>;
         spi-max-frequency = <4000000>;
-        chain-length = <6>;
-        spi-one-frame = <0x70>;
-        spi-zero-frame = <0x40>;
-        color-mapping = <LED_COLOR_ID_GREEN
-                         LED_COLOR_ID_RED
-                         LED_COLOR_ID_BLUE>;
+        chain-length     = <6>;
+        spi-one-frame    = <0x70>;
+        spi-zero-frame   = <0x40>;
+        color-mapping    = <LED_COLOR_ID_GREEN
+                            LED_COLOR_ID_RED
+                            LED_COLOR_ID_BLUE>;
     };
 };
 
 /* ============================================================
- * SPI1: 1 颗状态灯 WS2812, P0.29, GRB 顺序
- * → 由自定义 C 模块控制
- * 
- * 从 SPI2 改为 SPI1，规避 Nordic Anomaly 195 硬件 bug。
- * 引脚 P0.29 保持不变，硬件无需改动。
+ * ADC: 启用 SAADC，配置 AIN5 (P0.29) 作为滑动变阻器输入
  * ============================================================ */
-&spi1 {
-    compatible = "nordic,nrf-spim";
+&adc {
     status = "okay";
-    pinctrl-0 = <&spi1_default>;
-    pinctrl-1 = <&spi1_sleep>;
-    pinctrl-names = "default", "sleep";
 
-    status_led: ws2812@0 {
-        compatible = "worldsemi,ws2812-spi";
-        label = "WS2812_STATUS";
-        reg = <0>;
-        spi-max-frequency = <4000000>;
-        chain-length = <1>;
-        spi-one-frame = <0x70>;
-        spi-zero-frame = <0x40>;
-        color-mapping = <LED_COLOR_ID_GREEN
-                         LED_COLOR_ID_RED
-                         LED_COLOR_ID_BLUE>;
+    #address-cells = <1>;
+    #size-cells    = <0>;
+
+    /* 通道 5 → AIN5 (P0.29) */
+    channel@5 {
+        reg = <5>;
+        zephyr,gain             = "ADC_GAIN_1_6";
+        zephyr,reference        = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;
+        zephyr,input-positive   = <NRF_SAADC_AIN5>;
+        zephyr,resolution       = <12>;
     };
 };
 
-/* 明确禁用可能冲突的外设 */
-&spi2 { status = "disabled"; };
-/* &i2c1 { status = "disabled"; };   /* I2C1 与 SPI1 共享硬件实例 */
-
 /* ============================================================
- * pinctrl 配置
+ * pinctrl 配置（只保留 SPI3 背光）
  * ============================================================ */
 &pinctrl {
     spi3_default: spi3_default {
@@ -155,25 +145,11 @@
             psels = <NRF_PSEL(SPIM_MOSI, 0, 17)>;
         };
     };
+
     spi3_sleep: spi3_sleep {
         group1 {
             psels = <NRF_PSEL(SPIM_MOSI, 0, 17)>;
             low-power-enable;
         };
     };
-
-        spi1_default: spi1_default {
-        group1 {
-            psels = <NRF_PSEL(SPIM_MOSI, 0, 29)>,
-                    <NRF_PSEL(SPIM_SCK,  0, 8)>;   /* 补 dummy SCK，选空闲脚 */
-        };
-    };
-    spi1_sleep: spi1_sleep {
-        group1 {
-            psels = <NRF_PSEL(SPIM_MOSI, 0, 29)>,
-                    <NRF_PSEL(SPIM_SCK,  0, 8)>;
-            low-power-enable;
-        };
-    };
-
 };
