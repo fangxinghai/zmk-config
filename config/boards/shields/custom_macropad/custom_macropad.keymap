@@ -1,57 +1,50 @@
-#include <behaviors.dtsi>
-#include <dt-bindings/zmk/keys.h>
-#include <dt-bindings/zmk/bt.h>
-#include <dt-bindings/zmk/outputs.h>
-#include <dt-bindings/zmk/rgb.h>
+default_layer {
+    display-name = "Main";
+    bindings = <
+        &lt 1 W
+        &lt 2 W
+        &kp C_MUTE
+        &kp C_PREV
+        &kp C_PP
+        &kp C_NEXT
+        &kp C_VOL_UP
+        &kp C_VOL_DN
+        &kp C_VOL_UP   /* pos 8: 滑条音量+ */
+        &kp C_VOL_DN   /* pos 9: 滑条音量- */
+    >;
+    sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
+};
 
-/ {
-    keymap {
-        compatible = "zmk,keymap";
+bt_layer {
+    display-name = "BT";
+    bindings = <
+        &none
+        &out OUT_USB
+        &out OUT_BLE
+        &bt BT_SEL 0
+        &none
+        &bt BT_CLR
+        &bt BT_NXT
+        &bt BT_PRV
+        &kp C_VOL_UP   /* pos 8: 即使在 BT 层，滑条依然控音量 */
+        &kp C_VOL_DN   /* pos 9 */
+    >;
+    sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
+};
 
-        default_layer {
-            display-name = "Main";
-            bindings = <
-                &lt 1 W         /* Key 1: 点按W / 长按进层1(BT) */
-                &lt 2 W         /* Key 2: 点按W / 长按进层2(灯光) */
-                &kp C_MUTE      /* Key 3: 静音 */
-                &kp C_PREV      /* Key 4: 上一曲 */
-                &kp C_PP        /* Key 5: 播放/暂停 */
-                &kp C_NEXT      /* Key 6: 下一曲 */
-                &kp C_VOL_UP    /* 旋钮顺时针: 音量加 */
-                &kp C_VOL_DN    /* 旋钮逆时针: 音量减 */
-            >;
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
-        };
-
-        bt_layer {
-            display-name = "BT";
-            bindings = <
-                &none           /* Key 1 */
-                &out OUT_USB    /* Key 2: 切USB */
-                &out OUT_BLE    /* Key 3: 切蓝牙 */
-                &bt BT_SEL 0    /* Key 4: 蓝牙设备1 */
-                &none           /* Key 5: 原引导模式已移除 */
-                &bt BT_CLR      /* Key 6: 清除配对 */
-                &bt BT_NXT      /* 旋钮顺时针: 下一蓝牙 */
-                &bt BT_PRV      /* 旋钮逆时针: 上一蓝牙 */
-            >;
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
-        };
-
-        /* 第3层 (index 2): 灯光控制 */
-        rgb_layer {
-            display-name = "RGB";
-            bindings = <
-                &rgb_ug RGB_TOG     /* Key 1: 背光开关 */
-                &rgb_ug RGB_EFF     /* Key 2: 切换灯效 */
-                &rgb_ug RGB_HUI     /* Key 3: 色相 + */
-                &rgb_ug RGB_HUD     /* Key 4: 色相 - */
-                &rgb_ug RGB_BRI     /* Key 5: 亮度 + */
-                &rgb_ug RGB_BRD     /* Key 6: 亮度 - */
-                &rgb_ug RGB_SPI     /* 旋钮顺时针: 灯效速度 + */
-                &rgb_ug RGB_SPD     /* 旋钮逆时针: 灯效速度 - */
-            >;
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
-        };
-    };
+rgb_layer {
+    display-name = "RGB";
+    bindings = <
+        &rgb_ug RGB_TOG
+        &rgb_ug RGB_EFF
+        &rgb_ug RGB_HUI
+        &rgb_ug RGB_HUD
+        &rgb_ug RGB_BRI
+        &rgb_ug RGB_BRD
+        &rgb_ug RGB_SPI
+        &rgb_ug RGB_SPD
+        &kp C_VOL_UP   /* pos 8 */
+        &kp C_VOL_DN   /* pos 9 */
+    >;
+    sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
 };
